@@ -545,6 +545,7 @@ WipeTower::WipeTower(const Vec2f& pos, double rotation_deg, const PrintConfig& c
     m_semm(config.single_extruder_multi_material.value),
     m_wipe_tower_pos(pos),
     m_wipe_tower_width(float(config.wipe_tower_width)),
+    m_wipe_tower_depth_config(float(config.wipe_tower_depth)),
     m_wipe_tower_brim_width(float(config.wipe_tower_brim_width)),
     m_wipe_tower_cone_angle(float(config.wipe_tower_cone_angle)),
     m_extra_flow(float(config.wipe_tower_extra_flow/100.)),
@@ -1560,7 +1561,11 @@ void WipeTower::plan_toolchange(float z_par, float layer_height_par, unsigned in
     float first_wipe_volume = length_to_volume(first_wipe_line, m_perimeter_width * m_extra_flow, layer_height_par);
     float wiping_depth = get_wipe_depth(wipe_volume - first_wipe_volume, layer_height_par, m_perimeter_width, m_extra_flow, m_extra_spacing_wipe, width);
     
-	m_plan.back().tool_changes.push_back(WipeTowerInfo::ToolChange(old_tool, new_tool, ramming_depth + wiping_depth, ramming_depth, first_wipe_line, wipe_volume));
+    const float required_depth = ramming_depth + wiping_depth;
+    const float capped_depth = m_wipe_tower_depth_config > 0.f ?
+        std::min(required_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width)) :
+        required_depth;
+	m_plan.back().tool_changes.push_back(WipeTowerInfo::ToolChange(old_tool, new_tool, capped_depth, ramming_depth, first_wipe_line, wipe_volume));
 }
 
 
@@ -1577,6 +1582,8 @@ void WipeTower::plan_tower()
     for (int layer_index = int(m_plan.size()) - 1; layer_index >= 0; --layer_index)
 	{
 		float this_layer_depth = std::max(m_plan[layer_index].depth, m_plan[layer_index].toolchanges_depth());
+        if (m_wipe_tower_depth_config > 0.f)
+            this_layer_depth = std::min(this_layer_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width));
 		m_plan[layer_index].depth = this_layer_depth;
 		
 		if (this_layer_depth > m_wipe_tower_depth - m_perimeter_width)
@@ -1588,6 +1595,8 @@ void WipeTower::plan_tower()
 				m_plan[i].depth = this_layer_depth;
 		}
 	}
+    if (m_wipe_tower_depth_config > 0.f)
+        m_wipe_tower_depth = m_wipe_tower_depth_config;
 }
 
 void WipeTower::save_on_last_wipe()
@@ -1617,7 +1626,10 @@ void WipeTower::save_on_last_wipe()
                 float volume_we_need_depth_for = std::max(0.f, volume_left_to_wipe - length_to_volume(toolchange.first_wipe_line, m_perimeter_width*m_extra_flow, m_layer_info->height));
                 float depth_to_wipe = get_wipe_depth(volume_we_need_depth_for, m_layer_info->height, m_perimeter_width, m_extra_flow, m_extra_spacing_wipe, width);
 
-                toolchange.required_depth = toolchange.ramming_depth + depth_to_wipe;
+                const float required_depth = toolchange.ramming_depth + depth_to_wipe;
+                toolchange.required_depth = m_wipe_tower_depth_config > 0.f ?
+                    std::min(required_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width)) :
+                    required_depth;
                 toolchange.wipe_volume = volume_left_to_wipe;
             }
         }

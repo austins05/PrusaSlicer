@@ -254,6 +254,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "idle_temperature"
             || opt_key == "wipe_tower"
             || opt_key == "wipe_tower_width"
+            || opt_key == "wipe_tower_depth"
             || opt_key == "wipe_tower_brim_width"
             || opt_key == "wipe_tower_cone_angle"
             || opt_key == "wipe_tower_bridging"
@@ -575,10 +576,11 @@ std::string Print::validate(std::vector<std::string>* warnings) const
             return _u8L("Ooze prevention is only supported with the wipe tower when 'single_extruder_multi_material' is off.");
         if (m_config.use_volumetric_e)
             return _u8L("The Wipe Tower currently does not support volumetric E (use_volumetric_e=0).");
-        if (m_config.complete_objects && extruders.size() > 1)
-            return _u8L("The Wipe Tower is currently not supported for multimaterial sequential prints.");
+        if (m_config.complete_objects && extruders.size() > 1 && warnings != nullptr)
+            warnings->emplace_back(_u8L("Sequential multimaterial wipe tower support is experimental. "
+                "Use a small tower and verify the preview for object-to-tower clearance."));
         
-        if (m_objects.size() > 1) {
+        if (m_objects.size() > 1 && !m_config.complete_objects) {
             const SlicingParameters     &slicing_params0       = m_objects.front()->slicing_parameters();
             size_t                       tallest_object_idx    = 0;
             for (size_t i = 1; i < m_objects.size(); ++ i) {
@@ -1397,7 +1399,7 @@ bool Print::has_wipe_tower() const
 const WipeTowerData& Print::wipe_tower_data(size_t extruders_cnt) const
 {
     // If the wipe tower wasn't created yet, make sure the depth and brim_width members are set to default.
-    if (! is_step_done(psWipeTower) && extruders_cnt !=0) {
+    if ((! is_step_done(psWipeTower) || (m_config.complete_objects.value && m_wipe_tower_data.depth == 0.f)) && extruders_cnt !=0) {
         const_cast<Print*>(this)->m_wipe_tower_data.brim_width = m_config.wipe_tower_brim_width;
 
         // Calculating depth should take into account currently set wiping volumes.
@@ -1411,10 +1413,15 @@ const WipeTowerData& Print::wipe_tower_data(size_t extruders_cnt) const
         maximum = maximum * extruders_cnt / max_wipe_volumes.size();
 
         float width = float(m_config.wipe_tower_width);
+        if (m_config.complete_objects.value && std::abs(width - 60.f) < EPSILON)
+            width = 5.f;
         float layer_height = 0.2f; // just assume fixed value, it will still be better than before.
 
-        const_cast<Print*>(this)->m_wipe_tower_data.depth = (maximum/layer_height)/width;
+        const float configured_depth = float(m_config.wipe_tower_depth.value);
+        const_cast<Print*>(this)->m_wipe_tower_data.depth = configured_depth > 0.f ? configured_depth :
+            (m_config.complete_objects.value ? 15.f : (maximum/layer_height)/width);
         const_cast<Print*>(this)->m_wipe_tower_data.height = -1.f; // unknown yet
+        const_cast<Print*>(this)->m_wipe_tower_data.width = width;
     }
 
     return m_wipe_tower_data;
@@ -1438,7 +1445,7 @@ bool is_toolchange_required(
 void Print::_make_wipe_tower()
 {
     m_wipe_tower_data.clear();
-    if (! this->has_wipe_tower())
+    if (! this->has_wipe_tower() || m_config.complete_objects)
         return;
 
     std::vector<std::vector<float>> wipe_volumes = WipeTower::extract_wipe_volumes(m_config);

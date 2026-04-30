@@ -664,6 +664,10 @@ endif ()
 
 if (TARGET OpenVDB::openvdb)
     target_link_libraries(libslic3r PUBLIC OpenVDB::openvdb)
+    if (UNIX AND NOT APPLE)
+        find_library(BLOSC_LIBRARY NAMES blosc)
+        target_link_libraries(libslic3r PUBLIC ${BLOSC_LIBRARY})
+    endif ()
 endif()
 
 if(WIN32)

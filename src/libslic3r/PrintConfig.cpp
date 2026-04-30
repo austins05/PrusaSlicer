@@ -3821,7 +3821,16 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Width of a wipe tower");
     def->sidetext = L("mm");
     def->mode = comAdvanced;
+    def->min = 1.;
     def->set_default_value(new ConfigOptionFloat(60.));
+
+    def = this->add("wipe_tower_depth", coFloat);
+    def->label = L("Depth");
+    def->tooltip = L("Maximum depth of a wipe tower. Set to zero to let PrusaSlicer calculate the depth from the purging volumes.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->min = 0.;
+    def->set_default_value(new ConfigOptionFloat(0.));
 
     def = this->add("wipe_tower_brim_width", coFloat);
     def->label = L("Wipe tower brim width");

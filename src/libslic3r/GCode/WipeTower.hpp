@@ -280,6 +280,7 @@ private:
     bool   m_switch_filament_monitoring = false;
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
 	float  m_wipe_tower_width; 			// Width of the wipe tower.
+    float  m_wipe_tower_depth_config = 0.f; // User configured maximum depth. Zero means automatic.
 	float  m_wipe_tower_depth 	= 0.f; 	// Depth of the wipe tower
 	float  m_wipe_tower_height  = 0.f;
 	float  m_wipe_tower_cone_angle = 0.f;

@@ -240,8 +240,21 @@ std::string WipeTowerIntegration::tool_change(GCodeGenerator &gcodegen, int extr
     assert(m_layer_idx >= 0);
     if (gcodegen.writer().need_toolchange(extruder_id) || finish_layer) {
         if (m_layer_idx < (int)m_tool_changes.size()) {
-            if (!(size_t(m_tool_change_idx) < m_tool_changes[m_layer_idx].size()))
+            const std::vector<WipeTower::ToolChangeResult> &layer_tool_changes = m_tool_changes[m_layer_idx];
+            while (size_t(m_tool_change_idx) < layer_tool_changes.size()) {
+                const WipeTower::ToolChangeResult &candidate = layer_tool_changes[m_tool_change_idx];
+                if (candidate.new_tool == extruder_id)
+                    break;
+                if (!gcodegen.config().complete_objects.value && candidate.initial_tool != candidate.new_tool)
+                    break;
+                ++m_tool_change_idx;
+            }
+
+            if (!(size_t(m_tool_change_idx) < layer_tool_changes.size())) {
+                if (gcodegen.config().complete_objects.value)
+                    return gcodegen.set_extruder(extruder_id, gcodegen.writer().get_position().z());
                 throw Slic3r::RuntimeError("Wipe tower generation failed, possibly due to empty first layer.");
+            }
 
             // Calculate where the wipe tower layer will be printed. -1 means that print z will not change,
             // resulting in a wipe tower with sparse layers.
@@ -249,13 +262,13 @@ std::string WipeTowerIntegration::tool_change(GCodeGenerator &gcodegen, int extr
             bool ignore_sparse = false;
             if (gcodegen.config().wipe_tower_no_sparse_layers.value) {
                 wipe_tower_z = m_last_wipe_tower_print_z;
-                ignore_sparse = (m_tool_changes[m_layer_idx].size() == 1 && m_tool_changes[m_layer_idx].front().initial_tool == m_tool_changes[m_layer_idx].front().new_tool && m_layer_idx != 0);
+                ignore_sparse = (layer_tool_changes.size() == 1 && layer_tool_changes.front().initial_tool == layer_tool_changes.front().new_tool && m_layer_idx != 0);
                 if (m_tool_change_idx == 0 && !ignore_sparse)
-                    wipe_tower_z = m_last_wipe_tower_print_z + m_tool_changes[m_layer_idx].front().layer_height;
+                    wipe_tower_z = m_last_wipe_tower_print_z + layer_tool_changes.front().layer_height;
             }
 
             if (!ignore_sparse) {
-                gcode += append_tcr(gcodegen, m_tool_changes[m_layer_idx][m_tool_change_idx++], extruder_id, wipe_tower_z);
+                gcode += append_tcr(gcodegen, layer_tool_changes[m_tool_change_idx++], extruder_id, wipe_tower_z);
                 m_last_wipe_tower_print_z = wipe_tower_z;
             }
         }

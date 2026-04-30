@@ -1827,19 +1827,41 @@ void GCodeViewer::load_wipetower_shell(const Print& print)
         const double max_z = print.objects()[0]->model_object()->get_model()->max_z();
         const PrintConfig& config = print.config();
         const size_t extruders_count = get_extruders_count();
-        if (extruders_count > 1 && config.wipe_tower && !config.complete_objects) {
+        if (extruders_count > 1 && config.wipe_tower) {
             const WipeTowerData& wipe_tower_data = print.wipe_tower_data(extruders_count);
             const float depth = wipe_tower_data.depth;
             const std::vector<std::pair<float, float>> z_and_depth_pairs = print.wipe_tower_data(extruders_count).z_and_depth_pairs;
             const float brim_width = wipe_tower_data.brim_width;
             if (depth != 0.) {
-                GLVolume* volume{m_shells.volumes.load_wipe_tower_preview(wxGetApp().plater()->model().wipe_tower().position.x(), wxGetApp().plater()->model().wipe_tower().position.y(), config.wipe_tower_width, depth, z_and_depth_pairs,
-                    max_z, config.wipe_tower_cone_angle, wxGetApp().plater()->model().wipe_tower().rotation, false, brim_width, 0)};
-                m_shells.volumes.volumes.emplace_back(volume);
-                volume->color.a(0.25f);
-                volume->force_native_color = true;
-                volume->set_render_color(true);
-                m_shells_bounding_box.merge(volume->transformed_bounding_box());
+                float width = float(config.wipe_tower_width.value);
+                if (config.complete_objects.value && std::abs(width - 60.f) < EPSILON)
+                    width = 5.f;
+                std::vector<Vec2d> tower_positions;
+                const Vec2d base_pos = wxGetApp().plater()->model().wipe_tower().position;
+                if (config.complete_objects.value) {
+                    std::optional<Vec2d> anchor_shift;
+                    for (const PrintObject *object : print.objects()) {
+                        for (const PrintInstance &instance : object->instances()) {
+                            const Vec2d shift = unscale(instance.shift).cast<double>();
+                            if (!anchor_shift)
+                                anchor_shift = shift;
+                            tower_positions.emplace_back(base_pos + shift - *anchor_shift);
+                        }
+                    }
+                } else {
+                    tower_positions.emplace_back(base_pos);
+                }
+                size_t tower_idx = 0;
+                for (const Vec2d &tower_pos : tower_positions) {
+                    GLVolume* volume{m_shells.volumes.load_wipe_tower_preview(float(tower_pos.x()), float(tower_pos.y()), width, depth, z_and_depth_pairs,
+                        max_z, config.wipe_tower_cone_angle, wxGetApp().plater()->model().wipe_tower().rotation, false, brim_width, tower_idx)};
+                    m_shells.volumes.volumes.emplace_back(volume);
+                    volume->color.a(0.25f);
+                    volume->force_native_color = true;
+                    volume->set_render_color(true);
+                    m_shells_bounding_box.merge(volume->transformed_bounding_box());
+                    ++tower_idx;
+                }
                 m_max_bounding_box.reset();
             }
         }

@@ -383,7 +383,7 @@ if (APPLE)
     target_compile_definitions(boost_headeronly INTERFACE BOOST_ASIO_DISABLE_KQUEUE)
 endif()
 
-if(NOT SLIC3R_STATIC)
+if(NOT SLIC3R_STATIC AND NOT Boost_LOG_LIBRARY_RELEASE MATCHES "\\.a$")
     target_compile_definitions(boost_headeronly INTERFACE BOOST_LOG_DYN_LINK)
 endif()
 

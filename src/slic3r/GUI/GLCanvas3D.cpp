@@ -2744,16 +2744,17 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
 
         const bool wt = dynamic_cast<const ConfigOptionBool*>(m_config->option("wipe_tower"))->value;
         const bool co = dynamic_cast<const ConfigOptionBool*>(m_config->option("complete_objects"))->value;
-        const float w = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_width"))->value;
+        float w = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_width"))->value;
+        if (co && std::abs(w - 60.f) < EPSILON)
+            w = 5.f;
         const float bw = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_brim_width"))->value;
         const float ca = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_cone_angle"))->value;
 
-        if (extruders_count > 1 && wt && !co) {
+        if (extruders_count > 1 && wt) {
             for (size_t bed_idx = 0; bed_idx < s_multiple_beds.get_max_beds(); ++bed_idx) {
                 const Print *print = wxGetApp().plater()->get_fff_prints()[bed_idx].get();
 
-                const float x = m_model->get_wipe_tower_vector()[bed_idx].position.x();
-                const float y = m_model->get_wipe_tower_vector()[bed_idx].position.y();
+                const Vec2d base_pos = m_model->get_wipe_tower_vector()[bed_idx].position;
                 const float a = m_model->get_wipe_tower_vector()[bed_idx].rotation;
                 const float depth = print->wipe_tower_data(extruders_count).depth;
                 const std::vector<std::pair<float, float>> z_and_depth_pairs = print->wipe_tower_data(extruders_count).z_and_depth_pairs;
@@ -2763,28 +2764,53 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 // Height of a print (Show at least a slab).
                 const double height = height_real < 0.f ? std::max(m_model->max_z(), 10.0) : height_real;
                 if (depth != 0.) {
-#if SLIC3R_OPENGL_ES
-                    if (bed_idx >= m_wipe_tower_meshes.size())
-                        m_wipe_tower_meshes.resize(bed_idx + 1);
-                    GLVolume* volume = m_volumes.load_wipe_tower_preview(
-                        x, y, w, depth, z_and_depth_pairs, (float)height, ca, a, !is_wipe_tower_step_done,
-                        bw, bed_idx, &m_wipe_tower_meshes[bed_idx]);
-#else
-                    GLVolume* volume = m_volumes.load_wipe_tower_preview(
-                        x, y, w, depth, z_and_depth_pairs, (float)height, ca, a, !is_wipe_tower_step_done,
-                        bw, bed_idx);
-#endif // SLIC3R_OPENGL_ES
-                    const BoundingBoxf3& bb = volume->bounding_box();
-                    m_wipe_tower_bounding_boxes[bed_idx] = BoundingBoxf{to_2d(bb.min), to_2d(bb.max)};
-                    if(static_cast<int>(bed_idx) < s_multiple_beds.get_number_of_beds()) {
-                        m_volumes.volumes.emplace_back(volume);
-                        const auto volume_idx_wipe_tower_new{static_cast<int>(m_volumes.volumes.size() - 1)};
-                        auto it = volume_idxs_wipe_towers_old.find(m_volumes.volumes.back()->geometry_id.second);
-                        if (it != volume_idxs_wipe_towers_old.end())
-                            map_glvolume_old_to_new[it->second] = volume_idx_wipe_tower_new;
-                        m_volumes.volumes.back()->set_volume_offset(m_volumes.volumes.back()->get_volume_offset() + s_multiple_beds.get_bed_translation(bed_idx));
+                    std::vector<Vec2d> tower_positions;
+                    if (co) {
+                        std::optional<Vec2d> anchor_shift;
+                        for (const PrintObject *object : print->objects()) {
+                            for (const PrintInstance &instance : object->instances()) {
+                                const Vec2d shift = unscale(instance.shift).cast<double>();
+                                if (!anchor_shift)
+                                    anchor_shift = shift;
+                                tower_positions.emplace_back(base_pos + shift - *anchor_shift);
+                            }
+                        }
                     } else {
-                        delete volume;
+                        tower_positions.emplace_back(base_pos);
+                    }
+
+                    size_t tower_idx = 0;
+                    for (const Vec2d &tower_pos : tower_positions) {
+                        const size_t preview_idx = tower_idx == 0 ? bed_idx : bed_idx + tower_idx * s_multiple_beds.get_max_beds();
+#if SLIC3R_OPENGL_ES
+                        TriangleMesh *mesh = nullptr;
+                        if (tower_idx == 0) {
+                            if (bed_idx >= m_wipe_tower_meshes.size())
+                                m_wipe_tower_meshes.resize(bed_idx + 1);
+                            mesh = &m_wipe_tower_meshes[bed_idx];
+                        }
+                        GLVolume* volume = m_volumes.load_wipe_tower_preview(
+                            float(tower_pos.x()), float(tower_pos.y()), w, depth, z_and_depth_pairs, (float)height, ca, a, !is_wipe_tower_step_done,
+                            bw, preview_idx, mesh);
+#else
+                        GLVolume* volume = m_volumes.load_wipe_tower_preview(
+                            float(tower_pos.x()), float(tower_pos.y()), w, depth, z_and_depth_pairs, (float)height, ca, a, !is_wipe_tower_step_done,
+                            bw, preview_idx);
+#endif // SLIC3R_OPENGL_ES
+                        const BoundingBoxf3& bb = volume->bounding_box();
+                        if (tower_idx == 0)
+                            m_wipe_tower_bounding_boxes[bed_idx] = BoundingBoxf{to_2d(bb.min), to_2d(bb.max)};
+                        if(static_cast<int>(bed_idx) < s_multiple_beds.get_number_of_beds()) {
+                            m_volumes.volumes.emplace_back(volume);
+                            const auto volume_idx_wipe_tower_new{static_cast<int>(m_volumes.volumes.size() - 1)};
+                            auto it = volume_idxs_wipe_towers_old.find(m_volumes.volumes.back()->geometry_id.second);
+                            if (it != volume_idxs_wipe_towers_old.end())
+                                map_glvolume_old_to_new[it->second] = volume_idx_wipe_tower_new;
+                            m_volumes.volumes.back()->set_volume_offset(m_volumes.volumes.back()->get_volume_offset() + s_multiple_beds.get_bed_translation(bed_idx));
+                        } else {
+                            delete volume;
+                        }
+                        ++tower_idx;
                     }
                 } else {
                     m_wipe_tower_bounding_boxes[bed_idx] = std::nullopt;

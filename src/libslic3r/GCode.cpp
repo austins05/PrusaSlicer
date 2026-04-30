@@ -99,6 +99,91 @@ using namespace std::literals::string_view_literals;
 
 namespace Slic3r {
 
+namespace {
+
+struct SequentialWipeTowerData
+{
+    std::unique_ptr<std::vector<WipeTower::ToolChangeResult>> priming;
+    std::vector<std::vector<WipeTower::ToolChangeResult>> tool_changes;
+    std::unique_ptr<WipeTower::ToolChangeResult> final_purge;
+};
+
+static PrintConfig make_sequential_wipe_tower_config(const PrintConfig &config)
+{
+    PrintConfig out(config);
+    if (std::abs(out.wipe_tower_width.value - 60.) < EPSILON)
+        out.wipe_tower_width.value = 5.;
+    if (out.wipe_tower_depth.value <= 0.)
+        out.wipe_tower_depth.value = 15.;
+    return out;
+}
+
+static std::optional<SequentialWipeTowerData> make_sequential_wipe_tower_data(
+    const Print        &print,
+    const PrintObject  &object,
+    ToolOrdering       &tool_ordering)
+{
+    if (!print.has_wipe_tower() || !tool_ordering.has_wipe_tower())
+        return std::nullopt;
+
+    PrintConfig wipe_tower_config = make_sequential_wipe_tower_config(print.config());
+    std::vector<std::vector<float>> wipe_volumes = WipeTower::extract_wipe_volumes(wipe_tower_config);
+    WipeTower wipe_tower(print.model().wipe_tower().position.cast<float>(), print.model().wipe_tower().rotation,
+                         wipe_tower_config, print.default_region_config(), wipe_volumes, tool_ordering.first_extruder());
+
+    for (size_t i = 0; i < wipe_tower_config.nozzle_diameter.size(); ++i)
+        wipe_tower.set_extruder(i, wipe_tower_config);
+
+    SequentialWipeTowerData data;
+    data.priming = Slic3r::make_unique<std::vector<WipeTower::ToolChangeResult>>(
+        wipe_tower.prime((float)print.skirt_first_layer_height(), tool_ordering.all_extruders(), false));
+
+    unsigned int current_extruder_id = tool_ordering.all_extruders().back();
+    for (LayerTools &layer_tools : tool_ordering.layer_tools()) {
+        if (!layer_tools.has_wipe_tower)
+            continue;
+
+        wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height,
+                                   current_extruder_id, current_extruder_id, false);
+        for (const unsigned int extruder_id : layer_tools.extruders) {
+            const bool first_layer = &layer_tools == &tool_ordering.front();
+            const unsigned int last_extruder_id = layer_tools.extruders.back();
+            if (is_toolchange_required(first_layer, last_extruder_id, extruder_id, current_extruder_id)) {
+                float volume_to_wipe = wipe_volumes[current_extruder_id][extruder_id];
+                volume_to_wipe -= (float)wipe_tower_config.filament_minimal_purge_on_wipe_tower.get_at(extruder_id);
+                volume_to_wipe = layer_tools.wiping_extrusions_nonconst().mark_wiping_extrusions(
+                    print, layer_tools, current_extruder_id, extruder_id, volume_to_wipe);
+                volume_to_wipe += (float)wipe_tower_config.filament_minimal_purge_on_wipe_tower.get_at(extruder_id);
+
+                wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height,
+                                           current_extruder_id, extruder_id, volume_to_wipe);
+                current_extruder_id = extruder_id;
+            }
+        }
+        layer_tools.wiping_extrusions_nonconst().ensure_perimeters_infills_order(print, layer_tools);
+
+        if (&layer_tools == &tool_ordering.back() || (&layer_tools + 1)->wipe_tower_partitions == 0)
+            break;
+    }
+
+    data.tool_changes.reserve(tool_ordering.layer_tools().size());
+    wipe_tower.generate(data.tool_changes);
+
+    const coordf_t layer_height = object.config().layer_height.value;
+    if (tool_ordering.back().wipe_tower_partitions > 0) {
+        if (wipe_tower.layer_finished())
+            wipe_tower.set_layer(float(tool_ordering.back().print_z + layer_height), float(layer_height), 0, false, true);
+    } else {
+        assert(tool_ordering.back().wipe_tower_partitions == 0);
+        wipe_tower.set_layer(float(tool_ordering.back().print_z), float(layer_height), 0, false, true);
+    }
+    data.final_purge = Slic3r::make_unique<WipeTower::ToolChangeResult>(wipe_tower.tool_change((unsigned int)(-1)));
+
+    return data;
+}
+
+} // namespace
+
 // Only add a newline in case the current G-code does not end with a newline.
     static inline void check_add_eol(std::string& gcode)
     {
@@ -1272,6 +1357,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
     // Do all objects for each layer.
     if (print.config().complete_objects.value) {
         size_t finished_objects = 0;
+        const Vec2f sequential_wipe_tower_anchor_shift =
+            unscale((*print_object_instance_sequential_active)->shift).cast<float>();
         const PrintObject *prev_object = (*print_object_instance_sequential_active)->print_object;
         for (; print_object_instance_sequential_active != print_object_instances_ordering.end(); ++ print_object_instance_sequential_active) {
             const PrintObject &object = *(*print_object_instance_sequential_active)->print_object;
@@ -1287,6 +1374,18 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             }
             print.throw_if_canceled();
             this->set_origin(unscale((*print_object_instance_sequential_active)->shift));
+            std::optional<SequentialWipeTowerData> sequential_wipe_tower_data;
+            if (print.has_wipe_tower() && tool_ordering.has_wipe_tower())
+                sequential_wipe_tower_data = make_sequential_wipe_tower_data(print, object, tool_ordering);
+            if (sequential_wipe_tower_data) {
+                const Vec2f wipe_tower_pos = print.model().wipe_tower().position.cast<float>() +
+                    unscale((*print_object_instance_sequential_active)->shift).cast<float>() - sequential_wipe_tower_anchor_shift;
+                PrintConfig wipe_tower_config = make_sequential_wipe_tower_config(print.config());
+                m_wipe_tower = std::make_unique<GCode::WipeTowerIntegration>(
+                    wipe_tower_pos, print.model().wipe_tower().rotation, wipe_tower_config,
+                    *sequential_wipe_tower_data->priming, sequential_wipe_tower_data->tool_changes,
+                    *sequential_wipe_tower_data->final_purge);
+            }
             if (finished_objects > 0) {
                 // Move to the origin position for the copy we're going to print.
                 // This happens before Z goes down to layer 0 again, so that no collision happens hopefully.
@@ -1323,6 +1422,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             this->process_layers(print, tool_ordering, collect_layers_to_print(object),
                 *print_object_instance_sequential_active - object.instances().data(), 
                 smooth_path_cache_global, file);
+            m_wipe_tower.reset();
             ++ finished_objects;
             // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
             // Reset it when starting another object from 1st layer.
@@ -1657,8 +1757,11 @@ void GCodeGenerator::process_layers(
                 return LayerResult::make_nop_layer_result();
             } else {
                 ObjectLayerToPrint &layer = layers_to_print[layer_to_print_idx];
+                const LayerTools &layer_tools = tool_ordering.tools_for_layer(layer.print_z());
+                if (m_wipe_tower && layer_tools.has_wipe_tower)
+                    m_wipe_tower->next_layer();
                 print.throw_if_canceled();
-                return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
+                return this->process_layer(print, { std::move(layer) }, layer_tools,
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
                     &layer == &layers_to_print.back(), nullptr, single_object_idx);
             }

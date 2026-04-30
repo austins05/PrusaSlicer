@@ -462,10 +462,12 @@ target_link_libraries(
 if (MSVC)
     target_link_libraries(libslic3r_gui PUBLIC Setupapi.lib)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(LIBUSB_LIBRARY NAMES usb-1.0)
     target_link_libraries(libslic3r_gui PUBLIC
         ${DBus1_LIBRARIES}
         OpenSSL::SSL
         OpenSSL::Crypto
+        ${LIBUSB_LIBRARY}
     )
 elseif (APPLE)
     target_link_libraries(libslic3r_gui PUBLIC ${DISKARBITRATION_LIBRARY} ${COREWLAN_LIBRARY})
