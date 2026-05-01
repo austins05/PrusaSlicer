@@ -131,6 +131,7 @@ static constexpr const char* PPATH_ATTR = "p:path";
 static constexpr const char* OBJECTID_ATTR = "objectid";
 static constexpr const char* TRANSFORM_ATTR = "transform";
 static constexpr const char* PRINTABLE_ATTR = "printable";
+static constexpr const char* SEQUENTIAL_PRINT_ORDER_ATTR = "sequential_print_order";
 static constexpr const char* INSTANCESCOUNT_ATTR = "instances_count";
 static constexpr const char* CUSTOM_SUPPORTS_ATTR = "slic3rpe:custom_supports";
 static constexpr const char* CUSTOM_SEAM_ATTR = "slic3rpe:custom_seam";
@@ -622,7 +623,7 @@ namespace Slic3r {
         bool _handle_start_text_configuration(const char** attributes, unsigned int num_attributes);
         bool _handle_start_shape_configuration(const char **attributes, unsigned int num_attributes);
 
-        bool _create_object_instance(PathId object_id, const Transform3d& transform, const bool printable, unsigned int recur_counter);
+        bool _create_object_instance(PathId object_id, const Transform3d& transform, const bool printable, int sequential_print_order, unsigned int recur_counter);
 
         void _apply_transform(ModelInstance& instance, const Transform3d& transform);
 
@@ -2204,8 +2205,9 @@ namespace Slic3r {
         std::string path = get_attribute_value_string(attributes, num_attributes, PPATH_ATTR);
         if (path.empty()) path = m_model_path;
         int printable = get_attribute_value_bool(attributes, num_attributes, PRINTABLE_ATTR);
+        int sequential_print_order = get_attribute_value_int(attributes, num_attributes, SEQUENTIAL_PRINT_ORDER_ATTR);
 
-        return _create_object_instance({path, object_id}, transform, printable, 1);
+        return _create_object_instance({path, object_id}, transform, printable, sequential_print_order, 1);
     }
 
     bool _3MF_Importer::_handle_end_item()
@@ -2361,7 +2363,7 @@ namespace Slic3r {
         return true;
     }
 
-    bool _3MF_Importer::_create_object_instance(PathId object_id, const Transform3d& transform, const bool printable, unsigned int recur_counter)
+    bool _3MF_Importer::_create_object_instance(PathId object_id, const Transform3d& transform, const bool printable, int sequential_print_order, unsigned int recur_counter)
     {
         static const unsigned int MAX_RECURSIONS = 10;
 
@@ -2392,6 +2394,7 @@ namespace Slic3r {
                     return false;
                 }
                 instance->printable = printable;
+                instance->sequential_print_order = sequential_print_order;
 
                 m_instances.emplace_back(instance, transform);
             }
@@ -2399,7 +2402,7 @@ namespace Slic3r {
         else {
             // recursively process nested components
             for (const Component& component : it->second) {
-                if (!_create_object_instance(component.object_id, transform * component.transform, printable, recur_counter + 1))
+                if (!_create_object_instance(component.object_id, transform * component.transform, printable, sequential_print_order, recur_counter + 1))
                     return false;
             }
         }
@@ -2732,11 +2735,13 @@ namespace Slic3r {
             unsigned int id;
             Transform3d transform;
             bool printable;
+            int sequential_print_order;
 
-            BuildItem(unsigned int id, const Transform3d& transform, const bool printable)
+            BuildItem(unsigned int id, const Transform3d& transform, const bool printable, int sequential_print_order)
                 : id(id)
                 , transform(transform)
                 , printable(printable)
+                , sequential_print_order(sequential_print_order)
             {
             }
         };
@@ -3144,7 +3149,7 @@ namespace Slic3r {
             Transform3d t = instance->get_matrix();
             // instance_id is just a 1 indexed index in build_items.
             assert(instance_id == build_items.size() + 1);
-            build_items.emplace_back(instance_id, t, instance->printable);
+            build_items.emplace_back(instance_id, t, instance->printable, instance->sequential_print_order);
 
             stream << "  </" << OBJECT_TAG << ">\n";
 
@@ -3373,7 +3378,10 @@ namespace Slic3r {
         for (const BuildItem& item : build_items) {
             stream << "  <" << ITEM_TAG << " " << OBJECTID_ATTR << "=\"" << item.id << "\" " << TRANSFORM_ATTR << "=\"";
             add_transformation(stream, item.transform);
-            stream << "\" " << PRINTABLE_ATTR << "=\"" << item.printable << "\"/>\n";
+            stream << "\" " << PRINTABLE_ATTR << "=\"" << item.printable << "\"";
+            if (item.sequential_print_order > 0)
+                stream << " " << SEQUENTIAL_PRINT_ORDER_ATTR << "=\"" << item.sequential_print_order << "\"";
+            stream << "/>\n";
         }
 
         stream << " </" << BUILD_TAG << ">\n";

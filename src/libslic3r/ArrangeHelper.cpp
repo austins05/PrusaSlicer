@@ -1,6 +1,8 @@
 #include "ArrangeHelper.hpp"
 
 #include "libslic3r/Model.hpp"
+#include "libslic3r/Print.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/MultipleBeds.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -26,6 +28,15 @@ static bool arrange_sequential_wipe_towers(const ConfigBase& config)
 	return config.has("complete_objects") && config.opt_bool("complete_objects") &&
 		   config.has("wipe_tower") && config.opt_bool("wipe_tower") &&
 		   config.has("wipe_tower_arrange") && config.opt_bool("wipe_tower_arrange");
+}
+
+static bool has_custom_sequential_order(const Model& model)
+{
+	for (const ModelObject* mo : model.objects)
+		for (const ModelInstance* mi : mo->instances)
+			if (mi->sequential_print_order > 0)
+				return true;
+	return false;
 }
 
 static BoundingBox get_wipe_tower_box(const ConfigBase& config)
@@ -302,6 +313,66 @@ static Sequential::SolverConfiguration get_solver_config(const Sequential::Print
 	return Sequential::SolverConfiguration(printer_geometry);
 }
 
+static bool sequential_schedule_has_conflict(
+	const Sequential::SolverConfiguration& solver_configuration,
+	const Sequential::PrinterGeometry& printer_geometry,
+	const std::vector<Sequential::ObjectToPrint>& objects,
+	const std::vector<Sequential::ScheduledPlate>& plates)
+{
+	return Sequential::check_ScheduledObjectsForSequentialConflict(solver_configuration, printer_geometry, objects, plates).has_value();
+}
+
+static std::vector<Sequential::ScheduledPlate> greedy_schedule_in_fixed_order(
+	const Sequential::SolverConfiguration& solver_configuration,
+	const Sequential::PrinterGeometry& printer_geometry,
+	const std::vector<Sequential::ObjectToPrint>& objects)
+{
+	BoundingBox bed_bb = get_extents(printer_geometry.plate);
+	if (!bed_bb.defined)
+		bed_bb = solver_configuration.plate_bounding_box;
+
+	const coord_t step = scaled(5.);
+	std::vector<Sequential::ScheduledPlate> plates(1);
+
+	for (const Sequential::ObjectToPrint& object : objects) {
+		BoundingBox object_bb;
+		for (const auto& [height, polygon] : object.pgns_at_height)
+			object_bb.merge(get_extents(polygon));
+		if (!object_bb.defined) {
+			plates.back().scheduled_objects.emplace_back(object.id, 0, 0);
+			continue;
+		}
+
+		const coord_t min_x = bed_bb.min.x() - object_bb.min.x();
+		const coord_t max_x = bed_bb.max.x() - object_bb.max.x();
+		const coord_t min_y = bed_bb.min.y() - object_bb.min.y();
+		const coord_t max_y = bed_bb.max.y() - object_bb.max.y();
+
+		bool placed = false;
+		for (Sequential::ScheduledPlate& plate : plates) {
+			for (coord_t y = min_y; y <= max_y && !placed; y += step) {
+				for (coord_t x = min_x; x <= max_x && !placed; x += step) {
+					plate.scheduled_objects.emplace_back(object.id, x, y);
+					if (!sequential_schedule_has_conflict(solver_configuration, printer_geometry, objects, std::vector<Sequential::ScheduledPlate>{plate}))
+						placed = true;
+					else
+						plate.scheduled_objects.pop_back();
+				}
+			}
+		}
+
+		if (!placed) {
+			Sequential::ScheduledPlate new_plate;
+			const coord_t x = min_x <= max_x ? min_x : 0;
+			const coord_t y = min_y <= max_y ? min_y : 0;
+			new_plate.scheduled_objects.emplace_back(object.id, x, y);
+			plates.emplace_back(std::move(new_plate));
+		}
+	}
+
+	return plates;
+}
+
 static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
 	const Model& model,
 	const Sequential::PrinterGeometry& printer_geometry,
@@ -317,6 +388,72 @@ static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
 
 	// Now collect all objects and projections of convex hull above respective heights.
 	std::vector<std::pair<Sequential::ObjectToPrint, std::vector<Sequential::ObjectToPrint>>> objects; // first = object id, the vector = ids of its instances
+	std::map<int, int> sequential_order_by_id;
+	std::vector<int> model_order_ids;
+	for (const ModelObject* mo : model.objects)
+		for (const ModelInstance* mi : mo->instances) {
+			sequential_order_by_id[int(mi->id().id)] = mi->sequential_print_order;
+			if (selected_bed != -1) {
+				auto it = s_multiple_beds.get_inst_map().find(mi->id());
+				if (it == s_multiple_beds.get_inst_map().end() || it->second != selected_bed)
+					continue;
+			}
+			if (mi->printable)
+				model_order_ids.emplace_back(int(mi->id().id));
+		}
+
+	std::map<int, int> sequential_rank_by_id;
+	if (std::any_of(model_order_ids.begin(), model_order_ids.end(), [&sequential_order_by_id](int id) { return sequential_order_by_id[id] > 0; })) {
+		std::vector<int> explicit_order;
+		for (int id : model_order_ids)
+			if (sequential_order_by_id[id] > 0)
+				explicit_order.emplace_back(id);
+
+		std::stable_sort(explicit_order.begin(), explicit_order.end(), [&sequential_order_by_id](int lhs_id, int rhs_id) {
+			return sequential_order_by_id[lhs_id] < sequential_order_by_id[rhs_id];
+		});
+
+		std::vector<int> ordered(model_order_ids.size(), -1);
+		std::vector<int> placed;
+		placed.reserve(explicit_order.size());
+		for (int id : explicit_order) {
+			size_t target = size_t(std::min<int>(int(model_order_ids.size()) - 1, sequential_order_by_id[id] - 1));
+			while (target < ordered.size() && ordered[target] != -1)
+				++target;
+			if (target == ordered.size()) {
+				target = 0;
+				while (target < ordered.size() && ordered[target] != -1)
+					++target;
+			}
+			if (target < ordered.size()) {
+				ordered[target] = id;
+				placed.emplace_back(id);
+			}
+		}
+
+		size_t fill_idx = 0;
+		for (int id : model_order_ids) {
+			if (std::find(placed.begin(), placed.end(), id) != placed.end())
+				continue;
+			while (fill_idx < ordered.size() && ordered[fill_idx] != -1)
+				++fill_idx;
+			if (fill_idx < ordered.size())
+				ordered[fill_idx] = id;
+		}
+
+		for (size_t rank = 0; rank < ordered.size(); ++rank)
+			if (ordered[rank] != -1)
+				sequential_rank_by_id[ordered[rank]] = int(rank);
+	}
+
+	auto order_less = [&sequential_rank_by_id](int lhs_id, int rhs_id) {
+		auto lhs_rank = sequential_rank_by_id.find(lhs_id);
+		auto rhs_rank = sequential_rank_by_id.find(rhs_id);
+		if (lhs_rank != sequential_rank_by_id.end() && rhs_rank != sequential_rank_by_id.end())
+			return lhs_rank->second < rhs_rank->second;
+		return lhs_id < rhs_id;
+	};
+
 	for (const ModelObject* mo : model.objects) {
 		const TriangleMesh& raw_mesh = mo->raw_mesh();
 		coord_t height = scaled(mo->instance_bounding_box(0).size().z());
@@ -347,6 +484,9 @@ static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
 		
 		// Collect all instances of this object to be arranged, unglue it from the next object.
 		if (! instances.empty()) {
+			std::stable_sort(instances.begin(), instances.end(), [&order_less](const auto& a, const auto& b) {
+				return order_less(a.id, b.id);
+			});
 			objects.emplace_back(instances.front(), instances);
 			objects.back().second.erase(objects.back().second.begin()); // pop_front
 			if (! objects.back().second.empty())
@@ -356,10 +496,27 @@ static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
 		}
 	}
 
-	// Now order the objects so that the are always passed in the order of increasing id.
-	// That way, the algorithm will give the same result when called repeatedly.
-	// However, there is an exception: instances cannot be separated from their objects.
-	std::sort(objects.begin(), objects.end(), [](const auto& a, const auto& b) { return a.first.id < b.first.id; });
+	// Now order the objects so that they are deterministic. User-defined sequential
+	// order takes priority, while instances of the same model object stay grouped.
+	auto group_rank = [&sequential_rank_by_id](const auto& group) {
+		int rank = -1;
+		auto update_rank = [&sequential_rank_by_id, &rank](const Sequential::ObjectToPrint& object) {
+			auto it = sequential_rank_by_id.find(object.id);
+			if (it != sequential_rank_by_id.end())
+				rank = rank == -1 ? it->second : std::min(rank, it->second);
+		};
+		update_rank(group.first);
+		for (const Sequential::ObjectToPrint& instance : group.second)
+			update_rank(instance);
+		return rank;
+	};
+	std::stable_sort(objects.begin(), objects.end(), [&group_rank](const auto& a, const auto& b) {
+		const int a_rank = group_rank(a);
+		const int b_rank = group_rank(b);
+		if (a_rank >= 0 && b_rank >= 0)
+			return a_rank < b_rank;
+		return a.first.id < b.first.id;
+	});
 	std::vector<Sequential::ObjectToPrint> objects_out;
 	for (const auto& o : objects) {
 		objects_out.emplace_back(o.first);
@@ -392,17 +549,25 @@ SeqArrange::SeqArrange(const Model& model, const ConfigBase& config, bool curren
 	m_solver_configuration = get_solver_config(m_printer_geometry);
 	m_wipe_tower_relative_pos = optimal_sequential_wipe_tower_relative_pos(model, config);
 	m_objects = get_objects_to_print(model, m_printer_geometry, m_selected_bed, m_wipe_tower_relative_pos, config);
+	m_use_fixed_order_arrange = has_custom_sequential_order(model);
 }
 
 
 
 void SeqArrange::process_seq_arrange(std::function<void(int)> progress_fn)
 {
-	m_plates =
-		Sequential::schedule_ObjectsForSequentialPrint(
-			m_solver_configuration,
-			m_printer_geometry,
-			m_objects, progress_fn);
+	if (m_use_fixed_order_arrange) {
+		m_plates = greedy_schedule_in_fixed_order(m_solver_configuration, m_printer_geometry, m_objects);
+		progress_fn(100);
+	} else {
+		m_plates =
+			Sequential::schedule_ObjectsForSequentialPrint(
+				m_solver_configuration,
+				m_printer_geometry,
+				m_objects, progress_fn);
+		if (sequential_schedule_has_conflict(m_solver_configuration, m_printer_geometry, m_objects, m_plates))
+			m_plates = greedy_schedule_in_fixed_order(m_solver_configuration, m_printer_geometry, m_objects);
+	}
 
 	// If this was arrangement of a single bed, check that all instances of a single object
 	// ended up on the same bed. Otherwise we cannot apply the result (instances of a single
@@ -522,6 +687,9 @@ void SeqArrange::apply_seq_arrange(Model& model) const
 
 std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Model& model, const ConfigBase& config)
 {
+	if (has_custom_sequential_order(model))
+		return std::nullopt;
+
 	Sequential::PrinterGeometry printer_geometry = get_printer_geometry(config);
 	Sequential::SolverConfiguration solver_config = get_solver_config(printer_geometry);
 	std::vector<Sequential::ObjectToPrint> objects = get_objects_to_print(model, printer_geometry, -1, std::nullopt, config);
@@ -533,11 +701,9 @@ std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Mod
 	}
 
 	Sequential::ScheduledPlate plate;
+	std::map<int, const ModelInstance*> objects_to_schedule;
 	for (const ModelObject* mo : model.objects) {
-		int inst_id = -1;
 		for (const ModelInstance* mi : mo->instances) {
-			++inst_id;
-
 			auto it = s_multiple_beds.get_inst_map().find(mi->id());
 			if (it == s_multiple_beds.get_inst_map().end() || it->second != s_multiple_beds.get_active_bed())
 				continue;
@@ -547,9 +713,16 @@ std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Mod
 			if (it2 == objects.end())
 				continue;
 
-			Vec3d offset = s_multiple_beds.get_bed_translation(s_multiple_beds.get_active_bed());
-			plate.scheduled_objects.emplace_back(mi->id().id, scaled(mi->get_offset().x() - offset.x()), scaled(mi->get_offset().y() - offset.y()));
+			objects_to_schedule.emplace(int(mi->id().id), mi);
 		}
+	}
+	for (const Sequential::ObjectToPrint& object : objects) {
+		auto it = objects_to_schedule.find(object.id);
+		if (it == objects_to_schedule.end())
+			continue;
+		const ModelInstance* mi = it->second;
+		Vec3d offset = s_multiple_beds.get_bed_translation(s_multiple_beds.get_active_bed());
+		plate.scheduled_objects.emplace_back(mi->id().id, scaled(mi->get_offset().x() - offset.x()), scaled(mi->get_offset().y() - offset.y()));
 	}
 
 	std::optional<std::pair<int,int>> conflict = Sequential::check_ScheduledObjectsForSequentialConflict(solver_config, printer_geometry, objects, std::vector<Sequential::ScheduledPlate>(1, plate));
@@ -564,6 +737,60 @@ std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Mod
 			}
 		return names;
 	}
+	return std::nullopt;
+}
+
+std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Print& print, const ConfigBase& config)
+{
+	Sequential::PrinterGeometry printer_geometry = get_printer_geometry(config);
+	Sequential::SolverConfiguration solver_config = get_solver_config(printer_geometry);
+	std::vector<Sequential::ObjectToPrint> objects = get_objects_to_print(print.model(), printer_geometry, -1, std::nullopt, config);
+
+	if (printer_geometry.extruder_slices.empty()) {
+		// If there are no data for extruder (such as extruder_clearance_radius set to 0),
+		// consider it printable.
+		return {};
+	}
+
+	std::map<int, const PrintInstance*> objects_to_schedule;
+	for (const PrintInstance* instance : sort_object_instances_by_model_order(print)) {
+		if (instance == nullptr || instance->model_instance == nullptr)
+			continue;
+
+		auto it = std::find_if(objects.begin(), objects.end(), [instance](const Sequential::ObjectToPrint& otp) {
+			return otp.id == instance->model_instance->id().id;
+		});
+		if (it == objects.end())
+			continue;
+
+		objects_to_schedule.emplace(int(instance->model_instance->id().id), instance);
+	}
+
+	Sequential::ScheduledPlate plate;
+	for (const PrintInstance* instance : sort_object_instances_by_model_order(print)) {
+		if (instance == nullptr || instance->model_instance == nullptr)
+			continue;
+
+		auto it = objects_to_schedule.find(int(instance->model_instance->id().id));
+		if (it == objects_to_schedule.end())
+			continue;
+
+		plate.scheduled_objects.emplace_back(instance->model_instance->id().id, instance->shift.x(), instance->shift.y());
+	}
+
+	std::optional<std::pair<int,int>> conflict = Sequential::check_ScheduledObjectsForSequentialConflict(solver_config, printer_geometry, objects, std::vector<Sequential::ScheduledPlate>(1, plate));
+	if (conflict) {
+		std::pair<std::string, std::string> names;
+		for (const ModelObject* mo : print.model().objects)
+			for (const ModelInstance* mi : mo->instances) {
+				if (mi->id().id == conflict->first)
+					names.first = mo->name;
+				if (mi->id().id == conflict->second)
+					names.second = mo->name;
+			}
+		return names;
+	}
+
 	return std::nullopt;
 }
 

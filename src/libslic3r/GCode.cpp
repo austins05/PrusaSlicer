@@ -955,6 +955,48 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
             if (it != model_instance_to_print_instance.end() && it->first == model_instance)
                 instances.emplace_back(it->second);
         }
+    if (std::any_of(instances.begin(), instances.end(), [](const PrintInstance *instance) {
+        return instance->model_instance != nullptr && instance->model_instance->sequential_print_order > 0;
+    })) {
+        std::vector<const PrintInstance*> explicit_order;
+        explicit_order.reserve(instances.size());
+        for (const PrintInstance *instance : instances)
+            if (instance->model_instance != nullptr && instance->model_instance->sequential_print_order > 0)
+                explicit_order.emplace_back(instance);
+
+        std::stable_sort(explicit_order.begin(), explicit_order.end(), [](const PrintInstance *lhs, const PrintInstance *rhs) {
+            return lhs->model_instance->sequential_print_order < rhs->model_instance->sequential_print_order;
+        });
+
+        std::vector<const PrintInstance*> ordered(instances.size(), nullptr);
+        std::vector<const PrintInstance*> placed;
+        placed.reserve(explicit_order.size());
+        for (const PrintInstance *instance : explicit_order) {
+            size_t target = size_t(std::min<int>(int(instances.size()) - 1, instance->model_instance->sequential_print_order - 1));
+            while (target < ordered.size() && ordered[target] != nullptr)
+                ++target;
+            if (target == ordered.size()) {
+                target = 0;
+                while (target < ordered.size() && ordered[target] != nullptr)
+                    ++target;
+            }
+            if (target < ordered.size()) {
+                ordered[target] = instance;
+                placed.emplace_back(instance);
+            }
+        }
+
+        size_t fill_idx = 0;
+        for (const PrintInstance *instance : instances) {
+            if (std::find(placed.begin(), placed.end(), instance) != placed.end())
+                continue;
+            while (fill_idx < ordered.size() && ordered[fill_idx] != nullptr)
+                ++fill_idx;
+            if (fill_idx < ordered.size())
+                ordered[fill_idx] = instance;
+        }
+        instances = std::move(ordered);
+    }
     return instances;
 }
 
@@ -1419,6 +1461,11 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             // Process all layers of a single object instance (sequential mode) with a parallel pipeline:
             // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
             // and export G-code into file.
+            if ((*print_object_instance_sequential_active)->model_instance != nullptr)
+                file.write_format("; sequential print object order=%d model_instance_id=%llu object=\"%s\"\n",
+                    (*print_object_instance_sequential_active)->model_instance->sequential_print_order,
+                    static_cast<unsigned long long>((*print_object_instance_sequential_active)->model_instance->id().id),
+                    object.model_object()->name.c_str());
             this->process_layers(print, tool_ordering, collect_layers_to_print(object),
                 *print_object_instance_sequential_active - object.instances().data(), 
                 smooth_path_cache_global, file);

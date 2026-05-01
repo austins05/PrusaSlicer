@@ -846,6 +846,30 @@ wxMenuItem* MenuFactory::append_menu_item_printable(wxMenu* menu)
     return menu_item_printable;
 }
 
+wxMenuItem* MenuFactory::append_menu_item_sequential_print_order(wxMenu* menu)
+{
+    wxMenuItem* menu_item = append_menu_item(menu, wxID_ANY, _L("Sequential print order") + dots,
+        _L("Set the numeric order used by sequential printing"),
+        [](wxCommandEvent&) { obj_list()->set_sequential_print_order_for_selected_items(); }, "number_of_copies", menu);
+
+    m_parent->Bind(wxEVT_UPDATE_UI, [](wxUpdateUIEvent& evt) {
+        ObjectList* list = obj_list();
+        wxDataViewItemArray sels;
+        list->GetSelections(sels);
+        bool enable = false;
+        for (const wxDataViewItem& item : sels) {
+            const ItemType type = list->GetModel()->GetItemType(item);
+            if (type & (itObject | itVolume | itInstanceRoot | itInstance | itSettings | itLayerRoot | itLayer)) {
+                enable = true;
+                break;
+            }
+        }
+        evt.Enable(enable);
+    }, menu_item->GetId());
+
+    return menu_item;
+}
+
 void MenuFactory::append_menu_item_invalidate_cut_info(wxMenu* menu)
 {
     const wxString menu_name = _L("Invalidate cut info");
@@ -1171,6 +1195,7 @@ void MenuFactory::create_common_object_menu(wxMenu* menu)
     menu->AppendSeparator();
 
     append_menu_item_printable(menu);
+    append_menu_item_sequential_print_order(menu);
     menu->AppendSeparator();
 
     append_menu_item_reload_from_disk(menu);
@@ -1268,6 +1293,7 @@ void MenuFactory::create_instance_menu()
     // create "Instance to Object" menu item
     append_menu_item_instance_to_object(menu);
     append_menu_item_printable(menu);
+    append_menu_item_sequential_print_order(menu);
 }
 
 void MenuFactory::init(wxWindow* parent)
@@ -1378,6 +1404,7 @@ wxMenu* MenuFactory::multi_selection_menu()
         append_menu_item_change_extruder(menu);
     if (list_model()->GetItemType(sels[0]) != itVolume) {
         append_menu_item_printable(menu);
+        append_menu_item_sequential_print_order(menu);
 
         if (wxGetApp().get_mode() != comSimple)
             append_menu_item(menu, wxID_ANY, _L("Set number of instances") + dots, _L("Change the number of instances of the selected objects"),

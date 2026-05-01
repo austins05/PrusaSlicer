@@ -1145,6 +1145,8 @@ public:
     ModelInstanceEPrintVolumeState print_volume_state;
     // Whether or not this instance is printable
     bool printable { true };
+    // Optional user-defined sequential print order. 0 keeps the default model order.
+    int sequential_print_order { 0 };
 
     ModelObject* get_object() const { return this->object; }
 
@@ -1209,7 +1211,8 @@ private:
     explicit ModelInstance(ModelObject* object) : print_volume_state(ModelInstancePVS_Inside), object(object) { assert(this->id().valid()); }
     // Constructor, which assigns a new unique ID.
     explicit ModelInstance(ModelObject *object, const ModelInstance &other) :
-        m_transformation(other.m_transformation), print_volume_state(ModelInstancePVS_Inside), printable(other.printable), object(object) { assert(this->id().valid() && this->id() != other.id()); }
+        m_transformation(other.m_transformation), print_volume_state(ModelInstancePVS_Inside), printable(other.printable),
+        sequential_print_order(other.sequential_print_order), object(object) { assert(this->id().valid() && this->id() != other.id()); }
 
     explicit ModelInstance(ModelInstance &&rhs) = delete;
     ModelInstance& operator=(const ModelInstance &rhs) = delete;
@@ -1220,7 +1223,7 @@ private:
 	// Used for deserialization, therefore no IDs are allocated.
 	ModelInstance() : ObjectBase(-1), object(nullptr) { assert(this->id().invalid()); }
 	template<class Archive> void serialize(Archive &ar) {
-        ar(m_transformation, print_volume_state, printable);
+        ar(m_transformation, print_volume_state, printable, sequential_print_order);
     }
 };
 

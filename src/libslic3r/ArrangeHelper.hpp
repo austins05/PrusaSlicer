@@ -11,6 +11,7 @@ namespace Slic3r {
 
 	class Model;
 	class ConfigBase;
+	class Print;
 
 	class ExceptionCannotAttemptSeqArrange : public std::exception {};
 	class ExceptionCannotApplySeqArrange : public std::exception {};
@@ -18,6 +19,7 @@ namespace Slic3r {
 	void arrange_model_sequential(Model& model, const ConfigBase& config);
     
 	std::optional<std::pair<std::string, std::string>> check_seq_conflict(const Model& model, const ConfigBase& config);
+	std::optional<std::pair<std::string, std::string>> check_seq_conflict(const Print& print, const ConfigBase& config);
 
 	// This is just a helper class to collect data for seq. arrangement, running the arrangement
 	// and applying the results to model. It is here so the processing itself can be offloaded
@@ -35,6 +37,7 @@ namespace Slic3r {
 		std::vector<Sequential::ObjectToPrint> m_objects;
 		std::optional<Vec2crd> m_wipe_tower_relative_pos;
 		int m_selected_bed = -1;
+		bool m_use_fixed_order_arrange = false;
 
 		// This is the output, filled in by process_seq_arrange.
 		std::vector<Sequential::ScheduledPlate> m_plates;

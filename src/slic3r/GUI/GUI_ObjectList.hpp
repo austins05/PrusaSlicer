@@ -406,6 +406,7 @@ public:
     //update printable state for item from objects model
     void update_printable_state(int obj_idx, int instance_idx);
     void toggle_printable_state();
+    void set_sequential_print_order_for_selected_items();
 
     void set_extruder_for_selected_items(const int extruder) const ;
     wxDataViewItemArray reorder_volumes_and_get_selection(size_t obj_idx, std::function<bool(const ModelVolume*)> add_to_selection = nullptr);

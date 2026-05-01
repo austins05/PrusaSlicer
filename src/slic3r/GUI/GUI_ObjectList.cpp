@@ -40,6 +40,7 @@
 #include <wx/progdlg.h>
 #include <wx/listbook.h>
 #include <wx/numformatter.h>
+#include <wx/numdlg.h>
 #include <wx/bookctrl.h> // IWYU pragma: keep
 
 #include "slic3r/Utils/FixModelByWin10.hpp"
@@ -4992,6 +4993,76 @@ void ObjectList::toggle_printable_state()
     wxGetApp().plater()->canvas3D()->update_instance_printable_state_for_objects(obj_idxs);
 
     // update scene
+    wxGetApp().plater()->update();
+}
+
+void ObjectList::set_sequential_print_order_for_selected_items()
+{
+    wxDataViewItemArray sels;
+    GetSelections(sels);
+    if (sels.IsEmpty())
+        return;
+
+    auto is_orderable_item = [this](const wxDataViewItem& item) {
+        const ItemType type = m_objects_model->GetItemType(item);
+        return type & (itObject | itVolume | itInstanceRoot | itInstance | itSettings | itLayerRoot | itLayer);
+    };
+
+    int current_order = 0;
+    for (const wxDataViewItem& item : sels) {
+        if (!is_orderable_item(item))
+            continue;
+
+        const ItemType type = m_objects_model->GetItemType(item);
+        const int obj_idx = m_objects_model->GetObjectIdByItem(item);
+        const ModelObject* obj = object(obj_idx);
+        if (obj == nullptr || obj->instances.empty())
+            continue;
+
+        const int inst_idx = type == itObject ? 0 : m_objects_model->GetInstanceIdByItem(item);
+        if (inst_idx >= 0 && inst_idx < int(obj->instances.size()))
+            current_order = obj->instances[inst_idx]->sequential_print_order;
+        break;
+    }
+
+    const long order = wxGetNumberFromUser(
+        _L("Use 0 to keep the automatic model order."),
+        _L("Sequential print order"),
+        _L("Sequential print order"),
+        current_order, 0, 9999, this);
+    if (order < 0)
+        return;
+
+    take_snapshot(_L("Change Sequential Print Order"));
+
+    std::vector<size_t> obj_idxs;
+    for (const wxDataViewItem& item : sels) {
+        if (!is_orderable_item(item))
+            continue;
+
+        const ItemType type = m_objects_model->GetItemType(item);
+        const int obj_idx = m_objects_model->GetObjectIdByItem(item);
+        ModelObject* obj = object(obj_idx);
+        if (obj == nullptr)
+            continue;
+
+        obj_idxs.emplace_back(static_cast<size_t>(obj_idx));
+
+        if (type == itInstance) {
+            const int inst_idx = m_objects_model->GetInstanceIdByItem(item);
+            if (inst_idx >= 0 && inst_idx < int(obj->instances.size()))
+                obj->instances[inst_idx]->sequential_print_order = int(order);
+        } else {
+            for (ModelInstance* inst : obj->instances)
+                inst->sequential_print_order = int(order);
+        }
+    }
+
+    sort(obj_idxs.begin(), obj_idxs.end());
+    obj_idxs.erase(unique(obj_idxs.begin(), obj_idxs.end()), obj_idxs.end());
+    if (!obj_idxs.empty())
+        wxGetApp().plater()->changed_objects(obj_idxs);
+
     wxGetApp().plater()->update();
 }
 

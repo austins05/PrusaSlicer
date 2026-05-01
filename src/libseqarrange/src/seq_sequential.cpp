@@ -364,7 +364,7 @@ void introduce_ConsequentialTemporalOrderingAgainstFixed(z3::solver             
 	{
 	    for (unsigned int j = i + 1; j < undecided.size(); ++j)
 	    {
-		Solver.add(dec_vars_T[undecided[i]] > dec_vars_T[undecided[j]] + temporal_spread || dec_vars_T[undecided[i]] + temporal_spread < dec_vars_T[undecided[j]]);
+		Solver.add(dec_vars_T[undecided[i]] + temporal_spread < dec_vars_T[undecided[j]]);
 	    }
 	}
     }
@@ -373,8 +373,7 @@ void introduce_ConsequentialTemporalOrderingAgainstFixed(z3::solver             
     {
 	for (unsigned int j = 0; j < fixed.size(); ++j)
 	{
-	    Solver.add(   dec_vars_T[undecided[i]] > Context.real_val(dec_values_T[fixed[j]].numerator, dec_values_T[fixed[j]].denominator) + temporal_spread
-		       || dec_vars_T[undecided[i]] + temporal_spread < Context.real_val(dec_values_T[fixed[j]].numerator, dec_values_T[fixed[j]].denominator));
+	    Solver.add(Context.real_val(dec_values_T[fixed[j]].numerator, dec_values_T[fixed[j]].denominator) + temporal_spread < dec_vars_T[undecided[i]]);
 	}	
     }
 

@@ -989,7 +989,7 @@ void Print::process()
     if (conflictRes.has_value())
         BOOST_LOG_TRIVIAL(error) << boost::format("gcode path conflicts found between %1% and %2%") % conflictRes->_objName1 % conflictRes->_objName2;
 
-    m_sequential_collision_detected =  config().complete_objects ? check_seq_conflict(model(), config()) : std::nullopt;
+    m_sequential_collision_detected = config().complete_objects ? check_seq_conflict(*this, config()) : std::nullopt;
 
     BOOST_LOG_TRIVIAL(info) << "Slicing process finished." << log_memory_info();
 }
