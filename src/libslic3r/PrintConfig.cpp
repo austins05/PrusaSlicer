@@ -3801,6 +3801,12 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("wipe_tower_arrange", coBool);
+    def->label = L("Arrange wipe towers with objects");
+    def->tooltip = L("When arranging sequential multi-material prints, include each object's wipe tower footprint in the spacing calculation.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
+
     def = this->add("wiping_volumes_matrix", coFloats);
     def->label = L("Purging volumes - matrix");
     def->tooltip = L("This matrix describes volumes (in cubic milimetres) required to purge the"

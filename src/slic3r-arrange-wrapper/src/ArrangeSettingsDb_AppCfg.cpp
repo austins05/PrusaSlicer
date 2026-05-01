@@ -49,9 +49,6 @@ void ArrangeSettingsDb_AppCfg::sync()
     std::string en_rot_sla_str =
         m_appcfg->get("arrange", "enable_rotation_sla");
 
-    std::string arrange_wipe_towers_fff_seqp_str =
-        m_appcfg->get("arrange", "arrange_wipe_towers_fff_seq_print");
-
     std::string alignment_xl_str =
         m_appcfg->get("arrange", "alignment_xl");
 
@@ -103,11 +100,6 @@ void ArrangeSettingsDb_AppCfg::sync()
         m_settings_sla.vals.rotations = (en_rot_sla_str == "1" || en_rot_sla_str == "yes");
     else
         m_settings_sla.vals.rotations = m_settings_sla.defaults.rotations;
-
-    if (!arrange_wipe_towers_fff_seqp_str.empty())
-        m_settings_fff_seq.vals.arrange_wipe_towers = (arrange_wipe_towers_fff_seqp_str == "1" || arrange_wipe_towers_fff_seqp_str == "yes");
-    else
-        m_settings_fff_seq.vals.arrange_wipe_towers = m_settings_fff_seq.defaults.arrange_wipe_towers;
 
     // Override default alignment and save/load it to a temporary slot "alignment_xl"
     auto arr_alignment = ArrangeSettingsView::to_xl_pivots(alignment_xl_str)
@@ -171,15 +163,6 @@ arr2::ArrangeSettingsDb& ArrangeSettingsDb_AppCfg::set_rotation_enabled(bool v)
     Slot &slot = get_slot(this);
     slot.vals.rotations = v;
     m_appcfg->set("arrange", "enable_rotation" + slot.postfix, v ? "1" : "0");
-
-    return *this;
-}
-
-arr2::ArrangeSettingsDb& ArrangeSettingsDb_AppCfg::set_wipe_tower_arrange_enabled(bool v)
-{
-    Slot &slot = get_slot(this);
-    slot.vals.arrange_wipe_towers = v;
-    m_appcfg->set("arrange", "arrange_wipe_towers" + slot.postfix, v ? "1" : "0");
 
     return *this;
 }

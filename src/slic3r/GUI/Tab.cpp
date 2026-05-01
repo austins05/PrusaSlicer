@@ -1662,6 +1662,7 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Wipe tower"));
         optgroup->append_single_option_line("wipe_tower");
+        optgroup->append_single_option_line("wipe_tower_arrange");
         optgroup->append_single_option_line("wipe_tower_width");        
         optgroup->append_single_option_line("wipe_tower_depth");
         optgroup->append_single_option_line("wipe_tower_brim_width");

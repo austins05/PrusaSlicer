@@ -1032,6 +1032,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloat,              travel_short_distance_acceleration))
     ((ConfigOptionBools,              wipe))
     ((ConfigOptionBool,               wipe_tower))
+    ((ConfigOptionBool,               wipe_tower_arrange))
     ((ConfigOptionFloat,              wipe_tower_acceleration))
     ((ConfigOptionFloat,              wipe_tower_width))
     ((ConfigOptionFloat,              wipe_tower_depth))

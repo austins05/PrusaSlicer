@@ -52,7 +52,6 @@ public:
     float get_distance_from_objects() const override { return m_db->get_distance_from_objects(); }
     float get_distance_from_bed() const  override { return m_db->get_distance_from_bed(); }
     bool  is_rotation_enabled() const override { return m_db->is_rotation_enabled(); }
-    bool  is_wipe_tower_arrange_enabled() const override { return m_db->is_wipe_tower_arrange_enabled(); }
 
     XLPivots get_xl_alignment() const override { return m_db->get_xl_alignment(); }
     GeometryHandling get_geometry_handling() const override { return m_db->get_geometry_handling(); }
