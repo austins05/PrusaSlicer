@@ -45,6 +45,16 @@ static BoundingBox get_wipe_tower_box(const ConfigBase& config)
 		Point::new_scale(width + brim, depth + brim));
 }
 
+static coord_t sequential_wipe_tower_gap(const ConfigBase& config)
+{
+	double gap = 1.;
+	if (config.has("brim_width"))
+		gap += std::max(0., config.opt_float("brim_width"));
+	if (config.has("brim_separation"))
+		gap += std::max(0., config.opt_float("brim_separation"));
+	return scaled(gap);
+}
+
 static Polygon transformed_box_polygon(BoundingBox box, const Vec2crd& tr, double rotation)
 {
 	Polygon poly = box.polygon();
@@ -73,23 +83,36 @@ static double bbox_perimeter(const BoundingBox& bb)
 	return 2. * static_cast<double>(std::max<coord_t>(0, size.x()) + std::max<coord_t>(0, size.y()));
 }
 
+static BoundingBox model_instance_local_box(const ModelObject& object, const ModelInstance& instance)
+{
+	BoundingBox bb;
+	const TriangleMesh& raw_mesh = object.raw_mesh();
+	Polygon pgn = its_convex_hull_2d_above(raw_mesh.its, instance.get_matrix_no_offset().cast<float>(), 0. - instance.get_offset().z());
+	bb.merge(get_extents(pgn));
+	return bb;
+}
+
 static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const Model& model, const ConfigBase& config)
 {
 	if (!arrange_sequential_wipe_towers(config))
 		return std::nullopt;
 
-	BoundingBox local_objects_bb;
+	BoundingBox local_object_bb;
 	for (const ModelObject* mo : model.objects) {
-		const TriangleMesh& raw_mesh = mo->raw_mesh();
 		for (const ModelInstance* mi : mo->instances) {
 			if (!mi->printable)
 				continue;
-			Polygon pgn = its_convex_hull_2d_above(raw_mesh.its, mi->get_matrix_no_offset().cast<float>(), 0. - mi->get_offset().z());
-			local_objects_bb.merge(get_extents(pgn));
+
+			BoundingBox candidate_bb = model_instance_local_box(*mo, *mi);
+			if (!candidate_bb.defined)
+				continue;
+
+			if (!local_object_bb.defined || bbox_area(candidate_bb) > bbox_area(local_object_bb))
+				local_object_bb = candidate_bb;
 		}
 	}
 
-	if (!local_objects_bb.defined)
+	if (!local_object_bb.defined)
 		return std::nullopt;
 
 	const double rotation = (M_PI / 180.) * model.wipe_tower().rotation;
@@ -98,14 +121,14 @@ static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const M
 	if (!tower_local_bb.defined)
 		return std::nullopt;
 
-	constexpr coord_t gap = scaled(1.);
-	const Vec2crd object_center = local_objects_bb.center();
+	const coord_t gap = sequential_wipe_tower_gap(config);
+	const Vec2crd object_center = local_object_bb.center();
 	const Vec2crd tower_center  = tower_local_bb.center();
 
-	const coord_t left_x   = local_objects_bb.min.x() - gap - tower_local_bb.max.x();
-	const coord_t right_x  = local_objects_bb.max.x() + gap - tower_local_bb.min.x();
-	const coord_t bottom_y = local_objects_bb.min.y() - gap - tower_local_bb.max.y();
-	const coord_t top_y    = local_objects_bb.max.y() + gap - tower_local_bb.min.y();
+	const coord_t left_x   = local_object_bb.min.x() - gap - tower_local_bb.max.x();
+	const coord_t right_x  = local_object_bb.max.x() + gap - tower_local_bb.min.x();
+	const coord_t bottom_y = local_object_bb.min.y() - gap - tower_local_bb.max.y();
+	const coord_t top_y    = local_object_bb.max.y() + gap - tower_local_bb.min.y();
 	const coord_t center_x = object_center.x() - tower_center.x();
 	const coord_t center_y = object_center.y() - tower_center.y();
 
@@ -127,7 +150,7 @@ static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const M
 		BoundingBox tower_bb = tower_local_bb;
 		tower_bb.translate(candidate);
 
-		BoundingBox combined_bb = local_objects_bb;
+		BoundingBox combined_bb = local_object_bb;
 		combined_bb.merge(tower_bb);
 
 		double score = bbox_area(combined_bb);
@@ -136,7 +159,7 @@ static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const M
 		const double dy = static_cast<double>(candidate.y() + tower_center.y() - object_center.y());
 		score += (dx * dx + dy * dy) * 0.000001;
 
-		if (tower_bb.overlap(local_objects_bb))
+		if (tower_bb.overlap(local_object_bb))
 			score += bbox_area(tower_bb) * 1000.;
 
 		if (score < best_score) {

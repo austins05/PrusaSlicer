@@ -126,17 +126,18 @@ static std::optional<Vec2d> optimal_sequential_wipe_tower_pos(
     if (instances.empty() || instances.front()->model_instance == nullptr)
         return std::nullopt;
 
-    BoundingBox local_objects_bb;
+    BoundingBox local_object_bb;
     for (const PrintInstance *instance : instances) {
         if (instance->model_instance == nullptr)
             continue;
 
         BoundingBox instance_bb = scaled(to_2d(arr2::instance_bounding_box(*instance->model_instance)));
         instance_bb.translate(-instance->shift);
-        local_objects_bb.merge(instance_bb);
+        if (!local_object_bb.defined || bbox_area(instance_bb) > bbox_area(local_object_bb))
+            local_object_bb = instance_bb;
     }
 
-    if (!local_objects_bb.defined)
+    if (!local_object_bb.defined)
         return std::nullopt;
 
     const BoundingBox tower_local_bb = get_extents(get_wtpoly(Vec2d::Zero(), base_wti.rotation(), base_wti.bounding_box()));
@@ -144,13 +145,13 @@ static std::optional<Vec2d> optimal_sequential_wipe_tower_pos(
         return std::nullopt;
 
     constexpr coord_t gap = scaled(1.);
-    const Vec2crd object_center = local_objects_bb.center();
+    const Vec2crd object_center = local_object_bb.center();
     const Vec2crd tower_center  = tower_local_bb.center();
 
-    const coord_t left_x   = local_objects_bb.min.x() - gap - tower_local_bb.max.x();
-    const coord_t right_x  = local_objects_bb.max.x() + gap - tower_local_bb.min.x();
-    const coord_t bottom_y = local_objects_bb.min.y() - gap - tower_local_bb.max.y();
-    const coord_t top_y    = local_objects_bb.max.y() + gap - tower_local_bb.min.y();
+    const coord_t left_x   = local_object_bb.min.x() - gap - tower_local_bb.max.x();
+    const coord_t right_x  = local_object_bb.max.x() + gap - tower_local_bb.min.x();
+    const coord_t bottom_y = local_object_bb.min.y() - gap - tower_local_bb.max.y();
+    const coord_t top_y    = local_object_bb.max.y() + gap - tower_local_bb.min.y();
     const coord_t center_x = object_center.x() - tower_center.x();
     const coord_t center_y = object_center.y() - tower_center.y();
 
@@ -172,7 +173,7 @@ static std::optional<Vec2d> optimal_sequential_wipe_tower_pos(
         BoundingBox tower_bb = tower_local_bb;
         tower_bb.translate(candidate);
 
-        BoundingBox combined_bb = local_objects_bb;
+        BoundingBox combined_bb = local_object_bb;
         combined_bb.merge(tower_bb);
 
         double score = bbox_area(combined_bb);
@@ -181,7 +182,7 @@ static std::optional<Vec2d> optimal_sequential_wipe_tower_pos(
         const double dy = static_cast<double>(candidate.y() + tower_center.y() - object_center.y());
         score += (dx * dx + dy * dy) * 0.000001;
 
-        if (tower_bb.overlap(local_objects_bb))
+        if (tower_bb.overlap(local_object_bb))
             score += bbox_area(tower_bb) * 1000.;
 
         if (score < best_score) {
