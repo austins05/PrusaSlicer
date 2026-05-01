@@ -60,6 +60,7 @@ struct Parameters {
         const PrintObjectConfig    &object_config,
         const PrintConfig          &print_config,
         const PerimeterRegions     &perimeter_regions,
+        size_t                      number_of_layers,
         const bool                  spiral_vase) :   
             layer_height(layer_height),
             layer_id(layer_id),
@@ -71,6 +72,7 @@ struct Parameters {
             object_config(object_config), 
             print_config(print_config),
             perimeter_regions(perimeter_regions),
+            number_of_layers(number_of_layers),
             spiral_vase(spiral_vase),
             scaled_resolution(scaled<double>(print_config.gcode_resolution.value)),
             mm3_per_mm(perimeter_flow.mm3_per_mm()),
@@ -90,6 +92,7 @@ struct Parameters {
     const PrintObjectConfig     &object_config;
     const PrintConfig           &print_config;
     const PerimeterRegions      &perimeter_regions;
+    size_t                       number_of_layers;
 
     // Derived parameters
     bool                         spiral_vase;

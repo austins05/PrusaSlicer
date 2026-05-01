@@ -156,12 +156,17 @@ struct ExtrusionAttributes : ExtrusionFlow
     std::optional<OverhangAttributes> overhang_attributes;
     // Set only for external and internal perimeters. The external perimeter has value 0, the first internal perimeter has 1, and so on.
     std::optional<uint16_t> perimeter_index;
+    // Used by staggered perimeters / brick layers. The Z offset is expressed as a fraction of this path's extrusion height.
+    float staggered_z_offset{ 0.f };
+    float extrusion_multiplier{ 1.f };
 };
 
 inline bool operator==(const ExtrusionAttributes &lhs, const ExtrusionAttributes &rhs)
 {
     return static_cast<const ExtrusionFlow&>(lhs) == static_cast<const ExtrusionFlow&>(rhs) &&
-           lhs.role == rhs.role && lhs.overhang_attributes == rhs.overhang_attributes;
+           lhs.role == rhs.role && lhs.overhang_attributes == rhs.overhang_attributes &&
+           lhs.staggered_z_offset == rhs.staggered_z_offset &&
+           lhs.extrusion_multiplier == rhs.extrusion_multiplier;
 }
 
 class ExtrusionPath : public ExtrusionEntity
@@ -200,6 +205,7 @@ public:
     double length() const override;
    
     const ExtrusionAttributes&  attributes() const { return m_attributes; }
+    void                        set_attributes(const ExtrusionAttributes &attributes) { m_attributes = attributes; }
     ExtrusionRole               role() const override { return m_attributes.role; }
     float                       width() const { return m_attributes.width; }
     float                       height() const { return m_attributes.height; }

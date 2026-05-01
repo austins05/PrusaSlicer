@@ -284,7 +284,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
 {
     bool have_perimeters = config->opt_int("perimeters") > 0;
     for (auto el : { "extra_perimeters","extra_perimeters_on_overhangs", "thin_walls", "overhangs",
-                    "seam_position","staggered_inner_seams", "external_perimeters_first", "external_perimeter_extrusion_width",
+                    "seam_position","staggered_inner_seams", "staggered_perimeters", "staggered_perimeters_outer_wall_count",
+                    "staggered_perimeters_inner_extrusion_multiplier", "external_perimeters_first", "external_perimeter_extrusion_width",
                     "perimeter_speed", "small_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
         toggle_field(el, have_perimeters);
 
@@ -409,6 +410,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     toggle_field("wall_distribution_count", have_arachne);
     toggle_field("min_feature_size", have_arachne);
     toggle_field("min_bead_width", have_arachne);
+    toggle_field("staggered_perimeters", have_perimeters && have_arachne);
+    const bool have_staggered_perimeters = have_perimeters && have_arachne && config->opt_bool("staggered_perimeters");
+    toggle_field("staggered_perimeters_outer_wall_count", have_staggered_perimeters);
+    toggle_field("staggered_perimeters_inner_extrusion_multiplier", have_staggered_perimeters);
     toggle_field("thin_walls", !have_arachne);
 
     toggle_field("scarf_seam_placement", !has_spiral_vase);

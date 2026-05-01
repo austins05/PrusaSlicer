@@ -286,6 +286,7 @@ static void convert_lines_to_vertices(const Slic3r::Lines& lines, const std::vec
 static void convert_to_vertices(const Slic3r::ExtrusionPath& extrusion_path, float print_z, size_t layer_id, size_t extruder_id, size_t color_id,
     EGCodeExtrusionRole extrusion_role, const Slic3r::Point& shift, std::vector<PathVertex>& vertices)
 {
+    print_z += extrusion_path.attributes().staggered_z_offset * extrusion_path.height();
     Slic3r::Polyline polyline = extrusion_path.polyline;
     polyline.remove_duplicate_points();
     polyline.translate(shift);
@@ -298,6 +299,8 @@ static void convert_to_vertices(const Slic3r::ExtrusionPath& extrusion_path, flo
 static void convert_to_vertices(const Slic3r::ExtrusionMultiPath& extrusion_multi_path, float print_z, size_t layer_id, size_t extruder_id,
     size_t color_id, EGCodeExtrusionRole extrusion_role, const Slic3r::Point& shift, std::vector<PathVertex>& vertices)
 {
+    if (!extrusion_multi_path.paths.empty())
+        print_z += extrusion_multi_path.paths.front().attributes().staggered_z_offset * extrusion_multi_path.paths.front().height();
     Slic3r::Lines lines;
     std::vector<float> widths;
     std::vector<float> heights;
@@ -316,6 +319,8 @@ static void convert_to_vertices(const Slic3r::ExtrusionMultiPath& extrusion_mult
 static void convert_to_vertices(const Slic3r::ExtrusionLoop& extrusion_loop, float print_z, size_t layer_id, size_t extruder_id, size_t color_id,
     EGCodeExtrusionRole extrusion_role, const Slic3r::Point& shift, std::vector<PathVertex>& vertices)
 {
+    if (!extrusion_loop.paths.empty())
+        print_z += extrusion_loop.paths.front().attributes().staggered_z_offset * extrusion_loop.paths.front().height();
     Slic3r::Lines lines;
     std::vector<float> widths;
     std::vector<float> heights;
@@ -796,4 +801,3 @@ GCodeInputData convert(const Slic3r::Print& print, const std::vector<std::string
 }
 
 } // namespace libvgcode
-

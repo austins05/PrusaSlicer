@@ -3510,6 +3510,10 @@ std::string GCodeGenerator::_extrude(
 {
     std::string gcode;
     const std::string_view description_bridge = path_attr.role.is_bridge() ? " (bridge)"sv : ""sv;
+    const double staggered_z_offset = double(path_attr.staggered_z_offset) * double(path_attr.height);
+    const auto path_point_z = [this, &path_attr, staggered_z_offset](const auto &point) {
+        return this->m_last_layer_z + staggered_z_offset + (point.height_fraction - 1.0) * path_attr.height;
+    };
 
     const bool has_active_instance{m_label_objects.has_active_instance()};
     if (m_writer.multiple_extruders && has_active_instance) {
@@ -3517,7 +3521,7 @@ std::string GCodeGenerator::_extrude(
     }
 
     if (!this->last_position) {
-        const double z = this->m_last_layer_z;
+        const double z = path_point_z(path.front());
         const std::string comment{"move to print after unknown position"};
         gcode += this->retract_and_wipe();
         gcode += m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
@@ -3528,13 +3532,17 @@ std::string GCodeGenerator::_extrude(
         comment += description;
         comment += description_bridge;
         comment += " point";
-        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z))};
-        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + (path.front().height_fraction - 1.0) * path_attr.height))};
+        const Vec3crd from{to_3d(*this->last_position, scaled(m_writer.get_position().z()))};
+        const Vec3crd to{to_3d(path.front().point, scaled(path_point_z(path.front())))};
         const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
             return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
         })};
         gcode += travel_gcode;
     }
+
+    const double first_point_z = path_point_z(path.front());
+    if (std::abs(m_writer.get_position().z() - first_point_z) > EPSILON)
+        gcode += m_writer.travel_to_z(first_point_z, "move to perimeter z");
 
     // compensate retraction
     gcode += this->unretract();
@@ -3575,7 +3583,7 @@ std::string GCodeGenerator::_extrude(
     }
 
     // calculate extrusion length per distance unit
-    double e_per_mm = m_writer.extruder()->e_per_mm3() * path_attr.mm3_per_mm;
+    double e_per_mm = m_writer.extruder()->e_per_mm3() * path_attr.mm3_per_mm * path_attr.extrusion_multiplier;
     if (m_writer.extrusion_axis().empty())
         // gcfNoExtrusion
         e_per_mm = 0;
@@ -3754,8 +3762,9 @@ std::string GCodeGenerator::_extrude(
                 // Extrude line segment.
                 if (const double line_length = (p - prev).norm(); line_length > 0) {
                     double extrusion_amount{e_per_mm * line_length * it->e_fraction};
-                    if (it->height_fraction < 1.0 || std::prev(it)->height_fraction < 1.0) {
-                        const Vec3d destination{to_3d(p, this->m_last_layer_z + (it->height_fraction - 1) * m_last_height)};
+                    const double destination_z = path_point_z(*it);
+                    if (it->height_fraction < 1.0 || std::prev(it)->height_fraction < 1.0 || std::abs(m_writer.get_position().z() - destination_z) > EPSILON) {
+                        const Vec3d destination{to_3d(p, destination_z)};
                         gcode += m_writer.extrude_to_xyz(destination, extrusion_amount);
                     } else {
                         gcode += m_writer.extrude_to_xy(p, extrusion_amount, comment);

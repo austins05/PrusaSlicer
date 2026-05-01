@@ -126,6 +126,7 @@ void LayerRegion::make_perimeters(
         this->layer()->object()->config(),
         print_config,
         perimeter_regions,
+        this->layer()->object()->layers().size(),
         spiral_vase
     );
 

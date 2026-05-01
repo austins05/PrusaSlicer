@@ -2902,6 +2902,33 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("staggered_perimeters", coBool);
+    def->label = L("Staggered perimeters");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Experimental. Alternates inner perimeters by half a layer height to form a brick-like interlock between layers. "
+                     "Requires the Arachne perimeter generator and works best with equal first-layer and normal layer heights.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("staggered_perimeters_outer_wall_count", coInt);
+    def->label = L("Brick normal outer walls");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("When staggered perimeters are enabled, this many outer perimeter indexes are printed normally. "
+                     "For example, a value of 2 keeps the external wall and first inner wall at the normal layer height and flow.");
+    def->mode = comAdvanced;
+    def->min = 1;
+    def->set_default_value(new ConfigOptionInt(1));
+
+    def = this->add("staggered_perimeters_inner_extrusion_multiplier", coPercent);
+    def->label = L("Brick internal wall flow");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Extrusion multiplier for brick-layer internal walls after the normal outer walls. "
+                     "Use values such as 105% to slightly over-extrude the staggered internal walls.");
+    def->sidetext = L("%");
+    def->mode = comAdvanced;
+    def->min = 0;
+    def->set_default_value(new ConfigOptionPercent(100));
+
     def = this->add("scarf_seam_placement", coEnum);
     def->label = L("Scarf joint placement");
     def->category = L("Layers and Perimeters");

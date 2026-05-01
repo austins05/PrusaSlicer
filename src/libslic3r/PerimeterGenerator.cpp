@@ -423,6 +423,27 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
 {
     using namespace Slic3r::Feature::FuzzySkin;
 
+    const auto apply_staggered_perimeters = [&params](ExtrusionPaths &paths, const size_t inset_idx) {
+        const size_t normal_outer_wall_count = std::max(1, params.object_config.staggered_perimeters_outer_wall_count.value);
+        if (!params.object_config.staggered_perimeters || inset_idx < normal_outer_wall_count || inset_idx % 2 == 0 || params.number_of_layers < 4)
+            return;
+
+        const float inner_extrusion_multiplier = float(params.object_config.staggered_perimeters_inner_extrusion_multiplier.value / 100.);
+        for (ExtrusionPath &path : paths) {
+            ExtrusionAttributes attributes = path.attributes();
+            attributes.extrusion_multiplier = inner_extrusion_multiplier;
+            if (params.layer_id == 1)
+                attributes.extrusion_multiplier *= 1.5f;
+            else if (params.layer_id == int(params.number_of_layers) - 2)
+                attributes.extrusion_multiplier *= 0.5f;
+
+            if (params.layer_id != int(params.number_of_layers) - 2)
+                attributes.staggered_z_offset = 0.5f;
+
+            path.set_attributes(attributes);
+        }
+    };
+
     ExtrusionEntityCollection extrusion_coll;
     for (Arachne::PerimeterOrder::PerimeterExtrusion &pg_extrusion : pg_extrusions) {
         Arachne::ExtrusionLine extrusion = pg_extrusion.extrusion;
@@ -521,6 +542,8 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
 
         // Append paths to collection.
         if (!paths.empty()) {
+            apply_staggered_perimeters(paths, extrusion.inset_idx);
+
             if (extrusion.is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths));
                 // Restore the orientation of the extrusion loop.
@@ -1122,6 +1145,15 @@ void PerimeterGenerator::process_arachne(
     }());
 
     Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first);
+    if (params.object_config.staggered_perimeters) {
+        const size_t normal_outer_wall_count = std::max(1, params.object_config.staggered_perimeters_outer_wall_count.value);
+        std::stable_sort(ordered_extrusions.begin(), ordered_extrusions.end(),
+            [normal_outer_wall_count](const Arachne::PerimeterOrder::PerimeterExtrusion &lhs, const Arachne::PerimeterOrder::PerimeterExtrusion &rhs) {
+                const bool lhs_staggered = lhs.extrusion.inset_idx >= normal_outer_wall_count && lhs.extrusion.inset_idx % 2 == 1;
+                const bool rhs_staggered = rhs.extrusion.inset_idx >= normal_outer_wall_count && rhs.extrusion.inset_idx % 2 == 1;
+                return lhs_staggered < rhs_staggered;
+            });
+    }
 
     if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
         out_loops.append(extrusion_coll);
