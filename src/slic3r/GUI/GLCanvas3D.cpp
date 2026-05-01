@@ -23,6 +23,7 @@
 #include "libslic3r/BuildVolume.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/ThumbnailData.hpp"
 #include "libslic3r/Geometry/ConvexHull.hpp"
 #include "libslic3r/ExtrusionEntity.hpp"
@@ -2766,13 +2767,12 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 if (depth != 0.) {
                     std::vector<Vec2d> tower_positions;
                     if (co) {
-                        std::optional<Vec2d> anchor_shift;
-                        for (const PrintObject *object : print->objects()) {
-                            for (const PrintInstance &instance : object->instances()) {
-                                const Vec2d shift = unscale(instance.shift).cast<double>();
-                                if (!anchor_shift)
-                                    anchor_shift = shift;
-                                tower_positions.emplace_back(base_pos + shift - *anchor_shift);
+                        std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(*print);
+                        if (!instances.empty()) {
+                            const Vec2d anchor_shift = unscale(instances.front()->shift).cast<double>();
+                            for (const PrintInstance *instance : instances) {
+                                const Vec2d shift = unscale(instance->shift).cast<double>();
+                                tower_positions.emplace_back(base_pos + shift - anchor_shift);
                             }
                         }
                     } else {

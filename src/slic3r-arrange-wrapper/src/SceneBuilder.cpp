@@ -238,6 +238,7 @@ void SceneBuilder::build_arrangeable_slicer_model(ArrangeableSlicerModel &amodel
     amodel.m_wths = std::move(m_wipetower_handlers);
     amodel.m_bed_constraints = std::move(m_bed_constraints);
     amodel.m_considered_instances = std::move(m_considered_instances);
+    amodel.m_extra_instance_outlines = std::move(m_extra_instance_outlines);
 
     for (auto &wth : amodel.m_wths) {
         wth->set_selection_predicate(
@@ -580,7 +581,8 @@ void ArrangeableSlicerModel::for_each_arrangeable_(Self &&self, Fn &&fn)
                     self.m_vbed_handler.get(),
                     self.m_selmask.get(),
                     pos,
-                    get_bed_constraint(inst->id(), self.m_bed_constraints)
+                    get_bed_constraint(inst->id(), self.m_bed_constraints),
+                    &self.m_extra_instance_outlines
                 };
                 fn(ainst);
             }
@@ -609,7 +611,8 @@ void ArrangeableSlicerModel::visit_arrangeable_(Self &&self, const ObjectID &id,
             self.m_vbed_handler.get(),
             self.m_selmask.get(),
             pos,
-            get_bed_constraint(id, self.m_bed_constraints)
+            get_bed_constraint(id, self.m_bed_constraints),
+            &self.m_extra_instance_outlines
         };
         fn(ainst);
     }
@@ -729,7 +732,19 @@ ExPolygons ArrangeableModelInstance<InstPtr, VBedHPtr>::full_outline() const
     int bedidx = m_vbedh->get_bed_index(*this);
     auto tr = m_vbedh->get_physical_bed_trafo(bedidx);
 
-    return extract_full_outline(*m_mi, tr);
+    ExPolygons outline = extract_full_outline(*m_mi, tr);
+    if (m_extra_outlines != nullptr) {
+        auto it = m_extra_outlines->find(m_mi->id());
+        if (it != m_extra_outlines->end()) {
+            const Vec2d instance_pos = to_2d(m_mi->get_offset()) + to_2d(tr.translation());
+            for (const Polygon &relative_poly : it->second) {
+                Polygon poly = relative_poly;
+                poly.translate(scaled(instance_pos));
+                outline.emplace_back(std::move(poly));
+            }
+        }
+    }
+    return outline;
 }
 
 template<class InstPtr, class VBedHPtr>
@@ -738,7 +753,22 @@ Polygon ArrangeableModelInstance<InstPtr, VBedHPtr>::convex_outline() const
     int bedidx = m_vbedh->get_bed_index(*this);
     auto tr = m_vbedh->get_physical_bed_trafo(bedidx);
 
-    return extract_convex_outline(*m_mi, tr);
+    Polygon outline = extract_convex_outline(*m_mi, tr);
+    if (m_extra_outlines != nullptr) {
+        auto it = m_extra_outlines->find(m_mi->id());
+        if (it != m_extra_outlines->end()) {
+            const Vec2d instance_pos = to_2d(m_mi->get_offset()) + to_2d(tr.translation());
+            Polygons polygons{outline};
+            polygons.reserve(polygons.size() + it->second.size());
+            for (const Polygon &relative_poly : it->second) {
+                Polygon poly = relative_poly;
+                poly.translate(scaled(instance_pos));
+                polygons.emplace_back(std::move(poly));
+            }
+            outline = Geometry::convex_hull(polygons);
+        }
+    }
+    return outline;
 }
 
 template<class InstPtr, class VBedHPtr>

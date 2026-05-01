@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -217,6 +218,7 @@ protected:
     AnyPtr<const SelectionMask> m_selmask;  // Determines which objects are selected/unselected
     BedConstraints m_bed_constraints;
     std::optional<std::set<ObjectID>> m_considered_instances;
+    std::map<ObjectID, Polygons> m_extra_instance_outlines;
 
 private:
     friend class SceneBuilder;
@@ -251,6 +253,7 @@ protected:
     std::vector<AnyPtr<WipeTowerHandler>> m_wipetower_handlers;
     BedConstraints m_bed_constraints;
     std::optional<std::set<ObjectID>> m_considered_instances;
+    std::map<ObjectID, Polygons> m_extra_instance_outlines;
     AnyPtr<VirtualBedHandler> m_vbed_handler;
     AnyPtr<const SelectionMask> m_selection;
 
@@ -293,6 +296,12 @@ public:
     SceneBuilder && set_considered_instances(std::set<ObjectID> &&considered_instances)
     {
         m_considered_instances = std::move(considered_instances);
+        return std::move(*this);
+    }
+
+    SceneBuilder && set_extra_instance_outlines(std::map<ObjectID, Polygons> &&outlines)
+    {
+        m_extra_instance_outlines = std::move(outlines);
         return std::move(*this);
     }
 
@@ -453,14 +462,17 @@ class ArrangeableModelInstance : public Arrangeable, VBedPlaceable
     const SelectionMask *m_selmask;
     InstPos m_pos_within_model;
     std::optional<int> m_bed_constraint;
+    const std::map<ObjectID, Polygons> *m_extra_outlines;
 
 public:
     explicit ArrangeableModelInstance(InstPtr *mi,
                                       VBedHPtr *vbedh,
                                       const SelectionMask *selmask,
                                       const InstPos &pos,
-                                      const std::optional<int> bed_constraint)
+                                      const std::optional<int> bed_constraint,
+                                      const std::map<ObjectID, Polygons> *extra_outlines = nullptr)
         : m_mi{mi}, m_vbedh{vbedh}, m_selmask{selmask}, m_pos_within_model{pos}, m_bed_constraint(bed_constraint)
+        , m_extra_outlines{extra_outlines}
     {
         assert(m_mi != nullptr && m_vbedh != nullptr);
     }

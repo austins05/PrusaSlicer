@@ -8,6 +8,7 @@
 #include "GCodeViewer.hpp"
 
 #include "libslic3r/BuildVolume.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Model.hpp"
@@ -1839,13 +1840,12 @@ void GCodeViewer::load_wipetower_shell(const Print& print)
                 std::vector<Vec2d> tower_positions;
                 const Vec2d base_pos = wxGetApp().plater()->model().wipe_tower().position;
                 if (config.complete_objects.value) {
-                    std::optional<Vec2d> anchor_shift;
-                    for (const PrintObject *object : print.objects()) {
-                        for (const PrintInstance &instance : object->instances()) {
-                            const Vec2d shift = unscale(instance.shift).cast<double>();
-                            if (!anchor_shift)
-                                anchor_shift = shift;
-                            tower_positions.emplace_back(base_pos + shift - *anchor_shift);
+                    std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(print);
+                    if (!instances.empty()) {
+                        const Vec2d anchor_shift = unscale(instances.front()->shift).cast<double>();
+                        for (const PrintInstance *instance : instances) {
+                            const Vec2d shift = unscale(instance->shift).cast<double>();
+                            tower_positions.emplace_back(base_pos + shift - anchor_shift);
                         }
                     }
                 } else {

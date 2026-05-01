@@ -14,6 +14,7 @@
 
 #include <libslic3r/SLAPrint.hpp>
 #include <libslic3r/Print.hpp>
+#include <libslic3r/GCode.hpp>
 
 #include <slic3r/GUI/Plater.hpp>
 #include <slic3r/GUI/GLCanvas3D.hpp>
@@ -74,10 +75,10 @@ public:
     }
 };
 
-static Polygon get_wtpoly(const GLCanvas3D::WipeTowerInfo &wti)
+static Polygon get_wtpoly(const Vec2d &pos, double rotation, const BoundingBoxf &bounding_box)
 {
 
-    auto bb = scaled(wti.bounding_box());
+    auto bb = scaled(bounding_box);
     Polygon poly = Polygon({
         {bb.min},
         {bb.max.x(), bb.min.y()},
@@ -85,10 +86,40 @@ static Polygon get_wtpoly(const GLCanvas3D::WipeTowerInfo &wti)
         {bb.min.x(), bb.max.y()}
     });
 
-    poly.rotate(wti.rotation());
-    poly.translate(scaled(wti.pos()));
+    poly.rotate(rotation);
+    poly.translate(scaled(pos));
 
     return poly;
+}
+
+static Polygon get_wtpoly(const GLCanvas3D::WipeTowerInfo &wti)
+{
+    return get_wtpoly(wti.pos(), wti.rotation(), wti.bounding_box());
+}
+
+static std::map<ObjectID, Polygons> sequential_wipe_tower_instance_outlines(
+    const Print                    &print,
+    const GLCanvas3D::WipeTowerInfo &base_wti)
+{
+    std::map<ObjectID, Polygons> outlines;
+    std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(print);
+    if (instances.empty())
+        return outlines;
+
+    const Vec2d anchor_shift = unscale(instances.front()->shift).cast<double>();
+    for (const PrintInstance *instance : instances) {
+        if (instance->model_instance == nullptr)
+            continue;
+
+        const Vec2d instance_shift = unscale(instance->shift).cast<double>();
+        Polygon poly = get_wtpoly(
+            base_wti.pos() + instance_shift - anchor_shift,
+            base_wti.rotation(),
+            base_wti.bounding_box());
+        poly.translate(-instance->shift);
+        outlines[instance->model_instance->id()].emplace_back(std::move(poly));
+    }
+    return outlines;
 }
 
 // Wipe tower logic based on GLCanvas3D::WipeTowerInfo implements the Arrangeable
@@ -246,10 +277,21 @@ arr2::SceneBuilder build_scene(Plater &plater, ArrangeSelectionMode mode)
     builder.set_arrange_settings(plater.canvas3D()->get_arrange_settings_view());
 
     const auto wipe_tower_infos = plater.canvas3D()->get_wipe_tower_infos();
+    const bool has_sequential_wipe_towers =
+        plater.config() != nullptr &&
+        plater.config()->opt_bool("complete_objects") &&
+        plater.config()->opt_bool("wipe_tower") &&
+        plater.printer_technology() == ptFFF;
 
     std::vector<AnyPtr<arr2::WipeTowerHandler>> handlers;
 
+    if (has_sequential_wipe_towers && !wipe_tower_infos.empty())
+        builder.set_extra_instance_outlines(
+            sequential_wipe_tower_instance_outlines(plater.active_fff_print(), wipe_tower_infos.front()));
+
     for (const auto &info : wipe_tower_infos) {
+        if (has_sequential_wipe_towers)
+            break;
         if (info) {
             if (mode == ArrangeSelectionMode::CurrentBedFull && info.bed_index() != current_bed) {
                 continue;
