@@ -85,9 +85,9 @@ bool process_transform(Data& cli, const DynamicPrintConfig& print_config, std::v
         }
     }
     if (transform.has("duplicate_grid")) {
-        std::vector<int>& ints = transform.option<ConfigOptionInts>("duplicate_grid")->values;
-        const int x = ints.size() > 0 ? ints.at(0) : 1;
-        const int y = ints.size() > 1 ? ints.at(1) : 1;
+        const Vec2d& grid = transform.option<ConfigOptionPoint>("duplicate_grid")->value;
+        const int x = std::max(1, int(std::round(grid.x())));
+        const int y = std::max(1, int(std::round(grid.y())));
         const double distance = print_config.opt_float("duplicate_distance");
         for (auto& model : models)
             model.duplicate_objects_grid(x, y, (distance > 0) ? distance : 6);  // TODO: this is not the right place for setting a default
