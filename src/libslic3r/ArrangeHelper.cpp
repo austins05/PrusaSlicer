@@ -173,11 +173,12 @@ static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const M
 
 static void attach_wipe_tower_footprint(Sequential::ObjectToPrint& object, const Polygon& wipe_tower_poly)
 {
-	if (wipe_tower_poly.points.empty())
+	if (wipe_tower_poly.points.empty() || object.pgns_at_height.empty())
 		return;
 
-	for (auto& [height, pgn] : object.pgns_at_height)
-		pgn = Geometry::convex_hull(Polygons{std::move(pgn), wipe_tower_poly});
+	auto lowest = std::min_element(object.pgns_at_height.begin(), object.pgns_at_height.end(),
+		[](const auto& a, const auto& b) { return a.first < b.first; });
+	lowest->second = Geometry::convex_hull(Polygons{std::move(lowest->second), wipe_tower_poly});
 }
 
 	
