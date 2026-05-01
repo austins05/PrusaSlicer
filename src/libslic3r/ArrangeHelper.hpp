@@ -1,6 +1,8 @@
 #ifndef libslic3r_Arrange_Helper_hpp
 #define libslic3r_Arrange_Helper_hpp
 
+#include <optional>
+
 #include "libseqarrange/seq_interface.hpp"
 
 
@@ -31,6 +33,7 @@ namespace Slic3r {
 		Sequential::PrinterGeometry m_printer_geometry;
 		Sequential::SolverConfiguration m_solver_configuration;
 		std::vector<Sequential::ObjectToPrint> m_objects;
+		std::optional<Vec2crd> m_wipe_tower_relative_pos;
 		int m_selected_bed = -1;
 
 		// This is the output, filled in by process_seq_arrange.

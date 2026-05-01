@@ -5,7 +5,11 @@
 #include "libslic3r/MultipleBeds.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/BuildVolume.hpp"
+#include "libslic3r/Geometry/ConvexHull.hpp"
 
+#include <array>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "boost/regex.hpp"
@@ -16,6 +20,142 @@
 
 
 namespace Slic3r {
+
+static bool arrange_sequential_wipe_towers(const ConfigBase& config)
+{
+	return config.has("complete_objects") && config.opt_bool("complete_objects") &&
+		   config.has("wipe_tower") && config.opt_bool("wipe_tower") &&
+		   config.has("wipe_tower_arrange") && config.opt_bool("wipe_tower_arrange");
+}
+
+static BoundingBox get_wipe_tower_box(const ConfigBase& config)
+{
+	double width = config.has("wipe_tower_width") ? config.opt_float("wipe_tower_width") : 5.;
+	if (std::abs(width - 60.) < EPSILON)
+		width = 5.;
+
+	double depth = config.has("wipe_tower_depth") ? config.opt_float("wipe_tower_depth") : 15.;
+	if (depth <= 0.)
+		depth = 15.;
+
+	const double brim = config.has("wipe_tower_brim_width") ? std::max(0., config.opt_float("wipe_tower_brim_width")) : 0.;
+
+	return BoundingBox(
+		Point::new_scale(-brim, -brim),
+		Point::new_scale(width + brim, depth + brim));
+}
+
+static Polygon transformed_box_polygon(BoundingBox box, const Vec2crd& tr, double rotation)
+{
+	Polygon poly = box.polygon();
+	if (std::abs(rotation) > EPSILON)
+		poly.rotate(rotation);
+	poly.translate(tr);
+	return poly;
+}
+
+static double bbox_area(const BoundingBox& bb)
+{
+	if (!bb.defined)
+		return std::numeric_limits<double>::max();
+
+	const Vec2crd size = bb.size();
+	return static_cast<double>(std::max<coord_t>(0, size.x())) *
+		   static_cast<double>(std::max<coord_t>(0, size.y()));
+}
+
+static double bbox_perimeter(const BoundingBox& bb)
+{
+	if (!bb.defined)
+		return std::numeric_limits<double>::max();
+
+	const Vec2crd size = bb.size();
+	return 2. * static_cast<double>(std::max<coord_t>(0, size.x()) + std::max<coord_t>(0, size.y()));
+}
+
+static std::optional<Vec2crd> optimal_sequential_wipe_tower_relative_pos(const Model& model, const ConfigBase& config)
+{
+	if (!arrange_sequential_wipe_towers(config))
+		return std::nullopt;
+
+	BoundingBox local_objects_bb;
+	for (const ModelObject* mo : model.objects) {
+		const TriangleMesh& raw_mesh = mo->raw_mesh();
+		for (const ModelInstance* mi : mo->instances) {
+			if (!mi->printable)
+				continue;
+			Polygon pgn = its_convex_hull_2d_above(raw_mesh.its, mi->get_matrix_no_offset().cast<float>(), 0. - mi->get_offset().z());
+			local_objects_bb.merge(get_extents(pgn));
+		}
+	}
+
+	if (!local_objects_bb.defined)
+		return std::nullopt;
+
+	const double rotation = (M_PI / 180.) * model.wipe_tower().rotation;
+	const BoundingBox tower_unrotated_bb = get_wipe_tower_box(config);
+	const BoundingBox tower_local_bb = get_extents(transformed_box_polygon(tower_unrotated_bb, Vec2crd::Zero(), rotation));
+	if (!tower_local_bb.defined)
+		return std::nullopt;
+
+	constexpr coord_t gap = scaled(1.);
+	const Vec2crd object_center = local_objects_bb.center();
+	const Vec2crd tower_center  = tower_local_bb.center();
+
+	const coord_t left_x   = local_objects_bb.min.x() - gap - tower_local_bb.max.x();
+	const coord_t right_x  = local_objects_bb.max.x() + gap - tower_local_bb.min.x();
+	const coord_t bottom_y = local_objects_bb.min.y() - gap - tower_local_bb.max.y();
+	const coord_t top_y    = local_objects_bb.max.y() + gap - tower_local_bb.min.y();
+	const coord_t center_x = object_center.x() - tower_center.x();
+	const coord_t center_y = object_center.y() - tower_center.y();
+
+	const std::array<Vec2crd, 8> candidates{{
+		{right_x, center_y},
+		{left_x, center_y},
+		{center_x, top_y},
+		{center_x, bottom_y},
+		{right_x, top_y},
+		{right_x, bottom_y},
+		{left_x, top_y},
+		{left_x, bottom_y}
+	}};
+
+	Vec2crd best_candidate = candidates.front();
+	double best_score = std::numeric_limits<double>::max();
+
+	for (const Vec2crd& candidate : candidates) {
+		BoundingBox tower_bb = tower_local_bb;
+		tower_bb.translate(candidate);
+
+		BoundingBox combined_bb = local_objects_bb;
+		combined_bb.merge(tower_bb);
+
+		double score = bbox_area(combined_bb);
+		score += bbox_perimeter(combined_bb) * 0.01;
+		const double dx = static_cast<double>(candidate.x() + tower_center.x() - object_center.x());
+		const double dy = static_cast<double>(candidate.y() + tower_center.y() - object_center.y());
+		score += (dx * dx + dy * dy) * 0.000001;
+
+		if (tower_bb.overlap(local_objects_bb))
+			score += bbox_area(tower_bb) * 1000.;
+
+		if (score < best_score) {
+			best_score = score;
+			best_candidate = candidate;
+		}
+	}
+
+	return best_candidate;
+}
+
+static void attach_wipe_tower_footprint(Sequential::ObjectToPrint& object, const Polygon& wipe_tower_poly)
+{
+	if (wipe_tower_poly.points.empty())
+		return;
+
+	for (auto& [height, pgn] : object.pgns_at_height)
+		pgn = Geometry::convex_hull(Polygons{std::move(pgn), wipe_tower_poly});
+}
 
 	
 static bool can_arrange_selected_bed(const Model& model, int bed_idx)
@@ -138,7 +278,12 @@ static Sequential::SolverConfiguration get_solver_config(const Sequential::Print
 	return Sequential::SolverConfiguration(printer_geometry);
 }
 
-static std::vector<Sequential::ObjectToPrint> get_objects_to_print(const Model& model, const Sequential::PrinterGeometry& printer_geometry, int selected_bed)
+static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
+	const Model& model,
+	const Sequential::PrinterGeometry& printer_geometry,
+	int selected_bed,
+	const std::optional<Vec2crd>& wipe_tower_relative_pos,
+	const ConfigBase& config)
 {
 	// First extract the heights of interest.
 	std::vector<double> heights;
@@ -166,6 +311,12 @@ static std::vector<Sequential::ObjectToPrint> get_objects_to_print(const Model& 
 					// hence substracting mi->get_offset().z() from height seems to be an easy hack
 					Polygon pgn = its_convex_hull_2d_above(raw_mesh.its, mi->get_matrix_no_offset().cast<float>(), height - mi->get_offset().z());
 					instances.back().pgns_at_height.emplace_back(std::make_pair(scaled(height), pgn));
+				}
+
+				if (wipe_tower_relative_pos) {
+					const double rotation = (M_PI / 180.) * model.wipe_tower().rotation;
+					Polygon wipe_tower_poly = transformed_box_polygon(get_wipe_tower_box(config), *wipe_tower_relative_pos, rotation);
+					attach_wipe_tower_footprint(instances.back(), wipe_tower_poly);
 				}
 			}
 		}
@@ -215,7 +366,8 @@ SeqArrange::SeqArrange(const Model& model, const ConfigBase& config, bool curren
 
     m_printer_geometry = get_printer_geometry(config);
 	m_solver_configuration = get_solver_config(m_printer_geometry);
-	m_objects = get_objects_to_print(model, m_printer_geometry, m_selected_bed);
+	m_wipe_tower_relative_pos = optimal_sequential_wipe_tower_relative_pos(model, config);
+	m_objects = get_objects_to_print(model, m_printer_geometry, m_selected_bed, m_wipe_tower_relative_pos, config);
 }
 
 
@@ -256,6 +408,7 @@ void SeqArrange::apply_seq_arrange(Model& model) const
 		Sequential::ScheduledObject scheduled_object;
 		size_t bed_idx;
 		ModelObject* mo;
+		ModelInstance* mi;
 	};
 
 	// Iterate over the result and move the instances.
@@ -278,10 +431,16 @@ void SeqArrange::apply_seq_arrange(Model& model) const
 			for (ModelObject* mo : model.objects)
 				for (ModelInstance* mi : mo->instances)
 					if (mi->id().id == object.id) {
-						move_data_all.push_back({ object, size_t(real_bed), mo });
+						move_data_all.push_back({ object, size_t(real_bed), mo, mi });
 						mi->set_offset(Vec3d(unscaled(object.x) + bed_offset.x(), unscaled(object.y) + bed_offset.y(), mi->get_offset().z()));
 					}
 		++plate_idx;
+	}
+
+	if (m_wipe_tower_relative_pos && !move_data_all.empty()) {
+		const Vec2crd first_instance_pos = scaled(to_2d(move_data_all.front().mi->get_offset()));
+		const Vec2crd wipe_tower_pos = first_instance_pos + *m_wipe_tower_relative_pos;
+		model.wipe_tower().position = unscale(wipe_tower_pos);
 	}
 
 	// Create a copy of ModelObject pointers, zero ones present in move_data_all.
@@ -341,7 +500,7 @@ std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Mod
 {
 	Sequential::PrinterGeometry printer_geometry = get_printer_geometry(config);
 	Sequential::SolverConfiguration solver_config = get_solver_config(printer_geometry);
-	std::vector<Sequential::ObjectToPrint> objects = get_objects_to_print(model, printer_geometry, -1);
+	std::vector<Sequential::ObjectToPrint> objects = get_objects_to_print(model, printer_geometry, -1, std::nullopt, config);
 
 	if (printer_geometry.extruder_slices.empty()) {
 		// If there are no data for extruder (such as extruder_clearance_radius set to 0),
