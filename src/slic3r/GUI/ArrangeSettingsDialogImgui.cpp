@@ -18,6 +18,7 @@ struct Settings {
     float d_obj;
     float d_bed;
     bool  rotations;
+    bool  arrange_wipe_towers;
     int   xl_align;
     int   geom_handling;
     int   arr_strategy;
@@ -29,6 +30,7 @@ static void read_settings(Settings &s, const arr2::ArrangeSettingsDb *db)
     s.d_obj = db->get_distance_from_objects();
     s.d_bed = db->get_distance_from_bed();
     s.rotations = db->is_rotation_enabled();
+    s.arrange_wipe_towers = db->is_wipe_tower_arrange_enabled();
     s.xl_align  = db->get_xl_alignment();
     s.geom_handling = db->get_geometry_handling();
     s.arr_strategy = db->get_arrange_strategy();
@@ -125,6 +127,7 @@ void ArrangeSettingsDialogImgui::render(float pos_x, float pos_y, bool current_b
             m_db->set_distance_from_objects(df.d_obj);
             m_db->set_distance_from_bed(df.d_bed);
             m_db->set_rotation_enabled(df.rotations);
+            m_db->set_wipe_tower_arrange_enabled(df.arrange_wipe_towers);
             if (m_show_xl_combo_predicate())
                 m_db->set_xl_alignment(df.xl_align);
 
@@ -136,10 +139,15 @@ void ArrangeSettingsDialogImgui::render(float pos_x, float pos_y, bool current_b
         }
         ImGui::SameLine();
     } else {
+        Settings settings;
+        read_settings(settings, m_db.get());
         ImGui::PushTextWrapPos(350.f);
         ImGuiPureWrap::text(_u8L("Sequential printing is active. Arrange algorithm will use geometry of the printer "
                                  "to optimize objects placement and avoid collisions with the gantry."));
         ImGui::PopTextWrapPos();
+        if (ImGuiPureWrap::checkbox(_u8L("Arrange wipe towers with objects"), settings.arrange_wipe_towers)) {
+            m_db->set_wipe_tower_arrange_enabled(settings.arrange_wipe_towers);
+        }
         ImGui::Separator();
     }
 

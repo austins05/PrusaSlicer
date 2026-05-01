@@ -285,7 +285,7 @@ arr2::SceneBuilder build_scene(Plater &plater, ArrangeSelectionMode mode)
 
     std::vector<AnyPtr<arr2::WipeTowerHandler>> handlers;
 
-    if (has_sequential_wipe_towers && !wipe_tower_infos.empty())
+    if (has_sequential_wipe_towers && plater.canvas3D()->get_arrange_settings_view()->is_wipe_tower_arrange_enabled() && !wipe_tower_infos.empty())
         builder.set_extra_instance_outlines(
             sequential_wipe_tower_instance_outlines(plater.active_fff_print(), wipe_tower_infos.front()));
 

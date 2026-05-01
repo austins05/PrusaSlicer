@@ -34,6 +34,7 @@ public:
     virtual float get_distance_from_objects() const = 0;
     virtual float get_distance_from_bed() const     = 0;
     virtual bool  is_rotation_enabled() const       = 0;
+    virtual bool  is_wipe_tower_arrange_enabled() const = 0;
 
     virtual XLPivots         get_xl_alignment() const      = 0;
     virtual GeometryHandling get_geometry_handling() const = 0;
@@ -159,6 +160,7 @@ public:
     virtual ArrangeSettingsDb& set_distance_from_objects(float v) = 0;
     virtual ArrangeSettingsDb& set_distance_from_bed(float v) = 0;
     virtual ArrangeSettingsDb& set_rotation_enabled(bool v) = 0;
+    virtual ArrangeSettingsDb& set_wipe_tower_arrange_enabled(bool v) = 0;
 
     virtual ArrangeSettingsDb& set_xl_alignment(XLPivots v) = 0;
     virtual ArrangeSettingsDb& set_geometry_handling(GeometryHandling v) = 0;
@@ -167,6 +169,7 @@ public:
     struct Values {
         float d_obj = 6.f, d_bed = 0.f;
         bool rotations = false;
+        bool arrange_wipe_towers = true;
         XLPivots xl_align = XLPivots::xlpFrontLeft;
         GeometryHandling geom_handling = GeometryHandling::ghConvex;
         ArrangeStrategy  arr_strategy = ArrangeStrategy::asAuto;
@@ -179,6 +182,7 @@ public:
             arr_strategy = sv.get_arrange_strategy();
             geom_handling = sv.get_geometry_handling();
             rotations = sv.is_rotation_enabled();
+            arrange_wipe_towers = sv.is_wipe_tower_arrange_enabled();
             xl_align = sv.get_xl_alignment();
         }
     };
@@ -192,6 +196,7 @@ public:
         set_arrange_strategy(sv.get_arrange_strategy());
         set_geometry_handling(sv.get_geometry_handling());
         set_rotation_enabled(sv.is_rotation_enabled());
+        set_wipe_tower_arrange_enabled(sv.is_wipe_tower_arrange_enabled());
         set_xl_alignment(sv.get_xl_alignment());
 
         return *this;
@@ -215,6 +220,7 @@ public:
     float get_distance_from_objects() const override { return m_v.d_obj; }
     float get_distance_from_bed() const override { return m_v.d_bed; }
     bool  is_rotation_enabled() const override { return m_v.rotations; }
+    bool  is_wipe_tower_arrange_enabled() const override { return m_v.arrange_wipe_towers; }
     XLPivots get_xl_alignment() const override { return m_v.xl_align; }
     GeometryHandling get_geometry_handling() const override { return m_v.geom_handling; }
     ArrangeStrategy get_arrange_strategy() const override { return m_v.arr_strategy; }
@@ -225,6 +231,7 @@ public:
     ArrangeSettings& set_distance_from_objects(float v) override { m_v.d_obj = v; return *this; }
     ArrangeSettings& set_distance_from_bed(float v) override { m_v.d_bed = v; return *this; }
     ArrangeSettings& set_rotation_enabled(bool v) override { m_v.rotations = v; return *this; }
+    ArrangeSettings& set_wipe_tower_arrange_enabled(bool v) override { m_v.arrange_wipe_towers = v; return *this; }
     ArrangeSettings& set_xl_alignment(XLPivots v) override { m_v.xl_align = v; return *this; }
     ArrangeSettings& set_geometry_handling(GeometryHandling v) override { m_v.geom_handling = v; return *this; }
     ArrangeSettings& set_arrange_strategy(ArrangeStrategy v) override { m_v.arr_strategy = v; return *this; }

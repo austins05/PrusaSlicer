@@ -63,6 +63,7 @@ public:
     float get_distance_from_objects() const override { return get_ref(this).d_obj; }
     float get_distance_from_bed() const  override { return get_ref(this).d_bed; }
     bool  is_rotation_enabled() const override { return get_ref(this).rotations; }
+    bool  is_wipe_tower_arrange_enabled() const override { return get_ref(this).arrange_wipe_towers; }
 
     XLPivots get_xl_alignment() const override { return m_settings_fff.vals.xl_align; }
     GeometryHandling get_geometry_handling() const override { return m_settings_fff.vals.geom_handling; }
@@ -74,6 +75,7 @@ public:
     ArrangeSettingsDb& set_distance_from_objects(float v) override;
     ArrangeSettingsDb& set_distance_from_bed(float v) override;
     ArrangeSettingsDb& set_rotation_enabled(bool v) override;
+    ArrangeSettingsDb& set_wipe_tower_arrange_enabled(bool v) override;
 
     ArrangeSettingsDb& set_xl_alignment(XLPivots v) override;
     ArrangeSettingsDb& set_geometry_handling(GeometryHandling v) override;
