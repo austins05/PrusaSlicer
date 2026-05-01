@@ -4,6 +4,8 @@
 ///|/
 #include "ArrangeJob2.hpp"
 
+#include <array>
+#include <limits>
 #include <numeric>
 #include <iterator>
 
@@ -97,9 +99,105 @@ static Polygon get_wtpoly(const GLCanvas3D::WipeTowerInfo &wti)
     return get_wtpoly(wti.pos(), wti.rotation(), wti.bounding_box());
 }
 
+static double bbox_area(const BoundingBox &bb)
+{
+    if (!bb.defined)
+        return std::numeric_limits<double>::max();
+
+    const Vec2crd size = bb.size();
+    return static_cast<double>(std::max<coord_t>(0, size.x())) *
+           static_cast<double>(std::max<coord_t>(0, size.y()));
+}
+
+static double bbox_perimeter(const BoundingBox &bb)
+{
+    if (!bb.defined)
+        return std::numeric_limits<double>::max();
+
+    const Vec2crd size = bb.size();
+    return 2. * static_cast<double>(std::max<coord_t>(0, size.x()) + std::max<coord_t>(0, size.y()));
+}
+
+static std::optional<Vec2d> optimal_sequential_wipe_tower_pos(
+    const Print                     &print,
+    const GLCanvas3D::WipeTowerInfo &base_wti)
+{
+    std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(print);
+    if (instances.empty() || instances.front()->model_instance == nullptr)
+        return std::nullopt;
+
+    BoundingBox local_objects_bb;
+    for (const PrintInstance *instance : instances) {
+        if (instance->model_instance == nullptr)
+            continue;
+
+        BoundingBox instance_bb = scaled(to_2d(arr2::instance_bounding_box(*instance->model_instance)));
+        instance_bb.translate(-instance->shift);
+        local_objects_bb.merge(instance_bb);
+    }
+
+    if (!local_objects_bb.defined)
+        return std::nullopt;
+
+    const BoundingBox tower_local_bb = get_extents(get_wtpoly(Vec2d::Zero(), base_wti.rotation(), base_wti.bounding_box()));
+    if (!tower_local_bb.defined)
+        return std::nullopt;
+
+    constexpr coord_t gap = scaled(1.);
+    const Vec2crd object_center = local_objects_bb.center();
+    const Vec2crd tower_center  = tower_local_bb.center();
+
+    const coord_t left_x   = local_objects_bb.min.x() - gap - tower_local_bb.max.x();
+    const coord_t right_x  = local_objects_bb.max.x() + gap - tower_local_bb.min.x();
+    const coord_t bottom_y = local_objects_bb.min.y() - gap - tower_local_bb.max.y();
+    const coord_t top_y    = local_objects_bb.max.y() + gap - tower_local_bb.min.y();
+    const coord_t center_x = object_center.x() - tower_center.x();
+    const coord_t center_y = object_center.y() - tower_center.y();
+
+    const std::array<Vec2crd, 8> candidates{{
+        {right_x, center_y},
+        {left_x, center_y},
+        {center_x, top_y},
+        {center_x, bottom_y},
+        {right_x, top_y},
+        {right_x, bottom_y},
+        {left_x, top_y},
+        {left_x, bottom_y}
+    }};
+
+    Vec2crd best_candidate = candidates.front();
+    double best_score = std::numeric_limits<double>::max();
+
+    for (const Vec2crd &candidate : candidates) {
+        BoundingBox tower_bb = tower_local_bb;
+        tower_bb.translate(candidate);
+
+        BoundingBox combined_bb = local_objects_bb;
+        combined_bb.merge(tower_bb);
+
+        double score = bbox_area(combined_bb);
+        score += bbox_perimeter(combined_bb) * 0.01;
+        const double dx = static_cast<double>(candidate.x() + tower_center.x() - object_center.x());
+        const double dy = static_cast<double>(candidate.y() + tower_center.y() - object_center.y());
+        score += (dx * dx + dy * dy) * 0.000001;
+
+        if (tower_bb.overlap(local_objects_bb))
+            score += bbox_area(tower_bb) * 1000.;
+
+        if (score < best_score) {
+            best_score = score;
+            best_candidate = candidate;
+        }
+    }
+
+    const Vec2crd base_pos = best_candidate + instances.front()->shift;
+    return unscale(base_pos);
+}
+
 static std::map<ObjectID, Polygons> sequential_wipe_tower_instance_outlines(
     const Print                    &print,
-    const GLCanvas3D::WipeTowerInfo &base_wti)
+    const GLCanvas3D::WipeTowerInfo &base_wti,
+    const Vec2d                    &base_pos)
 {
     std::map<ObjectID, Polygons> outlines;
     std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(print);
@@ -113,7 +211,7 @@ static std::map<ObjectID, Polygons> sequential_wipe_tower_instance_outlines(
 
         const Vec2d instance_shift = unscale(instance->shift).cast<double>();
         Polygon poly = get_wtpoly(
-            base_wti.pos() + instance_shift - anchor_shift,
+            base_pos + instance_shift - anchor_shift,
             base_wti.rotation(),
             base_wti.bounding_box());
         poly.translate(-instance->shift);
@@ -285,9 +383,14 @@ arr2::SceneBuilder build_scene(Plater &plater, ArrangeSelectionMode mode)
 
     std::vector<AnyPtr<arr2::WipeTowerHandler>> handlers;
 
-    if (has_sequential_wipe_towers && plater.config()->opt_bool("wipe_tower_arrange") && !wipe_tower_infos.empty())
+    if (has_sequential_wipe_towers && plater.config()->opt_bool("wipe_tower_arrange") && !wipe_tower_infos.empty()) {
+        const GLCanvas3D::WipeTowerInfo &base_wti = wipe_tower_infos.front();
+        const Vec2d base_pos = optimal_sequential_wipe_tower_pos(plater.active_fff_print(), base_wti).value_or(base_wti.pos());
+
+        GLCanvas3D::WipeTowerInfo::apply_wipe_tower(base_pos, base_wti.rotation(), base_wti.bed_index());
         builder.set_extra_instance_outlines(
-            sequential_wipe_tower_instance_outlines(plater.active_fff_print(), wipe_tower_infos.front()));
+            sequential_wipe_tower_instance_outlines(plater.active_fff_print(), base_wti, base_pos));
+    }
 
     for (const auto &info : wipe_tower_infos) {
         if (has_sequential_wipe_towers)
