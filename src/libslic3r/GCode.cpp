@@ -128,10 +128,11 @@ static std::optional<SequentialWipeTowerData> make_sequential_wipe_tower_data(
 
     PrintConfig wipe_tower_config = make_sequential_wipe_tower_config(print.config());
     std::vector<std::vector<float>> wipe_volumes = WipeTower::extract_wipe_volumes(wipe_tower_config);
+    WipeTower::ensure_wipe_volumes_cover_tools(wipe_volumes, wipe_tower_config, tool_ordering.all_extruders());
     WipeTower wipe_tower(print.model().wipe_tower().position.cast<float>(), print.model().wipe_tower().rotation,
                          wipe_tower_config, print.default_region_config(), wipe_volumes, tool_ordering.first_extruder());
 
-    for (size_t i = 0; i < wipe_tower_config.nozzle_diameter.size(); ++i)
+    for (size_t i = 0; i < std::max(wipe_tower_config.nozzle_diameter.size(), wipe_volumes.size()); ++i)
         wipe_tower.set_extruder(i, wipe_tower_config);
 
     SequentialWipeTowerData data;
@@ -2622,6 +2623,60 @@ struct SmoothPathGenerator
     }
 };
 
+static bool smooth_path_is_brick_layer_path(const GCode::SmoothPath &smooth_path)
+{
+    return std::any_of(smooth_path.begin(), smooth_path.end(), [](const GCode::SmoothPathElement &el) {
+        return el.path_attributes.staggered_z_offset > 0.f;
+    });
+}
+
+static bool smooth_path_has_bridge(const GCode::SmoothPath &smooth_path)
+{
+    return std::any_of(smooth_path.begin(), smooth_path.end(), [](const GCode::SmoothPathElement &el) {
+        return el.path_attributes.role.is_bridge();
+    });
+}
+
+static void taper_smooth_path_end(GCode::SmoothPath &smooth_path, double taper_length, double end_flow)
+{
+    if (smooth_path.empty() || taper_length <= 0.)
+        return;
+
+    taper_length = scaled<double>(taper_length);
+    double distance_from_end = 0.;
+    for (auto el_it = smooth_path.rbegin(); el_it != smooth_path.rend() && distance_from_end < taper_length; ++el_it) {
+        Geometry::ArcWelder::Path &path = el_it->path;
+        if (path.size() < 2)
+            continue;
+
+        for (size_t idx = path.size() - 1; idx > 0 && distance_from_end < taper_length; --idx) {
+            const double segment_length = Geometry::ArcWelder::segment_length<double>(path[idx - 1], path[idx]);
+            if (segment_length <= 0.)
+                continue;
+
+            const double factor = end_flow + (1. - end_flow) * std::min(1., distance_from_end / taper_length);
+            path[idx].e_fraction *= factor;
+            distance_from_end += segment_length;
+        }
+    }
+}
+
+static GCode::SmoothPathElement make_light_wipe_element(
+    const ExtrusionAttributes &source_attr,
+    const Point &from,
+    const Point &to,
+    const double flow
+) {
+    GCode::SmoothPathElement el;
+    el.path_attributes = source_attr;
+    el.path_attributes.extrusion_multiplier *= flow;
+    el.path = Geometry::ArcWelder::Path{
+        Geometry::ArcWelder::Segment{from},
+        Geometry::ArcWelder::Segment{to}
+    };
+    return el;
+}
+
 std::vector<GCode::ExtrusionOrder::ExtruderExtrusions> GCodeGenerator::get_sorted_extrusions(
     const Print &print,
     const ObjectsLayerToPrint &layers,
@@ -3319,10 +3374,109 @@ std::string GCodeGenerator::extrude_perimeters(
         // Apply the small perimeter speed.
         if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)
             speed = m_config.small_perimeter_speed.get_abs_value(m_config.perimeter_speed);
-        gcode += this->extrude_smooth_path(perimeter.smooth_path, perimeter.extrusion_entity->is_loop(), comment_perimeter, speed, perimeter.wipe_offset);
+
+        const bool is_loop = perimeter.extrusion_entity->is_loop();
+        const bool is_external_perimeter = perimeter.extrusion_entity->role().is_external_perimeter();
+        const bool is_internal_perimeter = perimeter.extrusion_entity->role() == ExtrusionRole::Perimeter;
+        const bool is_bridge = smooth_path_has_bridge(perimeter.smooth_path);
+        const double perimeter_length = perimeter.extrusion_entity->length();
+
+        const bool apply_external_inward_scarf =
+            m_config.external_inward_scarf_exit
+            && is_loop
+            && is_external_perimeter
+            && !is_bridge
+            && m_config.perimeters.value > 1
+            && perimeter_length > std::max(10., 2.5 * m_config.external_inward_scarf_taper_length.value);
+
+        const bool apply_internal_brick_tuck =
+            m_config.internal_brick_seam_tuck
+            && is_loop
+            && is_internal_perimeter
+            && !is_bridge
+            && smooth_path_is_brick_layer_path(perimeter.smooth_path)
+            && m_config.internal_brick_seam_tuck_z_dip.value < m_last_height
+            && perimeter_length > std::max(10., 3. * m_config.internal_brick_seam_tuck_wipe_distance.value);
+
+        GCode::SmoothPath seam_cleanup_path;
+        const GCode::SmoothPath *path_to_extrude = &perimeter.smooth_path;
+        std::size_t wipe_offset = perimeter.wipe_offset;
+
+        if (apply_external_inward_scarf || apply_internal_brick_tuck) {
+            seam_cleanup_path = perimeter.smooth_path;
+            path_to_extrude = &seam_cleanup_path;
+
+            if (apply_external_inward_scarf) {
+                taper_smooth_path_end(
+                    seam_cleanup_path,
+                    m_config.external_inward_scarf_taper_length.value,
+                    m_config.external_inward_scarf_end_flow.value / 100.
+                );
+            }
+
+            if (apply_internal_brick_tuck && !seam_cleanup_path.empty()) {
+                const std::optional<Point> overlap_point = GCode::sample_path_point_at_distance_from_start(
+                    perimeter.smooth_path,
+                    scaled<double>(m_config.internal_brick_seam_tuck_overlap.value)
+                );
+                if (overlap_point && *overlap_point != seam_cleanup_path.back().path.back().point) {
+                    seam_cleanup_path.emplace_back(make_light_wipe_element(
+                        seam_cleanup_path.back().path_attributes,
+                        seam_cleanup_path.back().path.back().point,
+                        *overlap_point,
+                        1.
+                    ));
+                }
+            }
+            wipe_offset = 0;
+        }
+
+        gcode += this->extrude_smooth_path(*path_to_extrude, is_loop, comment_perimeter, speed, wipe_offset);
         this->m_travel_obstacle_tracker.mark_extruded(
             perimeter.extrusion_entity, print_instance.object_layer_to_print_id, print_instance.instance_id
         );
+
+        if (apply_external_inward_scarf) {
+            if (std::optional<Point> pt = wipe_hide_seam(*path_to_extrude, perimeter.reversed, scale_(m_config.external_inward_scarf_exit_distance.value)); pt) {
+                m_wipe.reset_path();
+                gcode += m_writer.travel_to_xy(this->point_to_gcode(*pt), "external inward scarf exit");
+                this->last_position = *pt;
+                if (m_config.external_inward_scarf_retract)
+                    gcode += m_writer.retract();
+            }
+        }
+
+        if (apply_internal_brick_tuck) {
+            if (std::optional<Point> pt = wipe_hide_seam(*path_to_extrude, perimeter.reversed, scale_(m_config.internal_brick_seam_tuck_wipe_distance.value)); pt) {
+                const double z_before_tuck = m_writer.get_position().z();
+                const double z_dip = std::min<double>(m_config.internal_brick_seam_tuck_z_dip.value, std::max(0., z_before_tuck - m_config.z_offset.value));
+                if (z_dip > EPSILON)
+                    gcode += m_writer.travel_to_z(z_before_tuck - z_dip, "internal brick seam tuck z dip");
+
+                ExtrusionAttributes tuck_attributes = path_to_extrude->back().path_attributes;
+                tuck_attributes.extrusion_multiplier *= m_config.internal_brick_seam_tuck_flow.value / 100.;
+                if (z_dip > EPSILON && tuck_attributes.height > 0.f)
+                    tuck_attributes.staggered_z_offset -= float(z_dip / tuck_attributes.height);
+
+                gcode += this->_extrude(
+                    tuck_attributes,
+                    Geometry::ArcWelder::Path{
+                        Geometry::ArcWelder::Segment{*this->last_position},
+                        Geometry::ArcWelder::Segment{*pt}
+                    },
+                    "internal brick seam tuck"sv,
+                    speed,
+                    EmitModifiers::create_with_disabled_emits()
+                );
+
+                if (m_config.internal_brick_seam_tuck_retract) {
+                    m_wipe.reset_path();
+                    gcode += m_writer.retract();
+                }
+                if (z_dip > EPSILON)
+                    gcode += m_writer.travel_to_z(z_before_tuck, "restore z after internal brick seam tuck");
+            }
+        }
 
         const bool is_extruding{
             !perimeter.smooth_path.empty()
@@ -3331,6 +3485,9 @@ std::string GCodeGenerator::extrude_perimeters(
         };
 
         if (
+            !apply_external_inward_scarf
+            && !apply_internal_brick_tuck
+            &&
             !m_wipe.enabled()
             && perimeter.extrusion_entity->role().is_external_perimeter()
             && m_layer != nullptr

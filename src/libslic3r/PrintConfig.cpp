@@ -2929,6 +2929,104 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->set_default_value(new ConfigOptionPercent(100));
 
+    def = this->add("external_inward_scarf_exit", coBool);
+    def->label = L("External inward scarf exit");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Experimental. Tapers the end of eligible external perimeter loops, then moves inward before retracting so the seam blob is pulled inside the wall.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("external_inward_scarf_taper_length", coFloat);
+    def->label = L("Scarf taper length");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Length over which the end of an eligible external perimeter is tapered before the seam.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 2.;
+    def->max = 6.;
+    def->set_default_value(new ConfigOptionFloat(3.));
+
+    def = this->add("external_inward_scarf_end_flow", coPercent);
+    def->label = L("Scarf end flow");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Extrusion flow reached at the end of the external inward scarf taper.");
+    def->sidetext = L("%");
+    def->mode = comExpert;
+    def->min = 20.;
+    def->max = 50.;
+    def->set_default_value(new ConfigOptionPercent(35));
+
+    def = this->add("external_inward_scarf_exit_distance", coFloat);
+    def->label = L("Inward exit distance");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Distance to move inward into the wall before retracting after an eligible external perimeter.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.2;
+    def->max = 0.5;
+    def->set_default_value(new ConfigOptionFloat(0.3));
+
+    def = this->add("external_inward_scarf_retract", coBool);
+    def->label = L("Retract after inward exit");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Retract immediately after the inward exit move.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("internal_brick_seam_tuck", coBool);
+    def->label = L("Internal brick seam tuck");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Experimental. Tucks eligible internal brick-layer perimeter seams by overlapping the seam and wiping lightly inward.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("internal_brick_seam_tuck_overlap", coFloat);
+    def->label = L("Overlap past seam");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Distance to continue past the seam before the inward brick seam tuck.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.4;
+    def->max = 1.;
+    def->set_default_value(new ConfigOptionFloat(0.6));
+
+    def = this->add("internal_brick_seam_tuck_z_dip", coFloat);
+    def->label = L("Z dip");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Temporary Z lowering used during the internal brick seam tuck.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.;
+    def->max = 0.08;
+    def->set_default_value(new ConfigOptionFloat(0.03));
+
+    def = this->add("internal_brick_seam_tuck_wipe_distance", coFloat);
+    def->label = L("Inward wipe distance");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Distance to wipe inward into the internal brick-layer region.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.2;
+    def->max = 0.6;
+    def->set_default_value(new ConfigOptionFloat(0.3));
+
+    def = this->add("internal_brick_seam_tuck_flow", coPercent);
+    def->label = L("Wipe extrusion flow");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Extrusion flow used for the internal brick seam tuck inward wipe.");
+    def->sidetext = L("%");
+    def->mode = comExpert;
+    def->min = 20.;
+    def->max = 60.;
+    def->set_default_value(new ConfigOptionPercent(40));
+
+    def = this->add("internal_brick_seam_tuck_retract", coBool);
+    def->label = L("Retract after tuck");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Retract immediately after the internal brick seam tuck.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(true));
+
     def = this->add("scarf_seam_placement", coEnum);
     def->label = L("Scarf joint placement");
     def->category = L("Layers and Perimeters");

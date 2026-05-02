@@ -284,7 +284,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
 {
     bool have_perimeters = config->opt_int("perimeters") > 0;
     for (auto el : { "extra_perimeters","extra_perimeters_on_overhangs", "thin_walls", "overhangs",
-                    "seam_position","staggered_inner_seams", "staggered_perimeters", "staggered_perimeters_outer_wall_count",
+                    "seam_position","staggered_inner_seams", "external_inward_scarf_exit", "external_inward_scarf_taper_length",
+                    "external_inward_scarf_end_flow", "external_inward_scarf_exit_distance", "external_inward_scarf_retract",
+                    "internal_brick_seam_tuck", "internal_brick_seam_tuck_overlap", "internal_brick_seam_tuck_z_dip",
+                    "internal_brick_seam_tuck_wipe_distance", "internal_brick_seam_tuck_flow", "internal_brick_seam_tuck_retract",
+                    "staggered_perimeters", "staggered_perimeters_outer_wall_count",
                     "staggered_perimeters_inner_extrusion_multiplier", "external_perimeters_first", "external_perimeter_extrusion_width",
                     "perimeter_speed", "small_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
         toggle_field(el, have_perimeters);
@@ -414,6 +418,18 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     const bool have_staggered_perimeters = have_perimeters && have_arachne && config->opt_bool("staggered_perimeters");
     toggle_field("staggered_perimeters_outer_wall_count", have_staggered_perimeters);
     toggle_field("staggered_perimeters_inner_extrusion_multiplier", have_staggered_perimeters);
+    const bool have_external_inward_scarf = have_perimeters && config->opt_bool("external_inward_scarf_exit");
+    toggle_field("external_inward_scarf_taper_length", have_external_inward_scarf);
+    toggle_field("external_inward_scarf_end_flow", have_external_inward_scarf);
+    toggle_field("external_inward_scarf_exit_distance", have_external_inward_scarf);
+    toggle_field("external_inward_scarf_retract", have_external_inward_scarf);
+    toggle_field("internal_brick_seam_tuck", have_staggered_perimeters);
+    const bool have_internal_brick_tuck = have_staggered_perimeters && config->opt_bool("internal_brick_seam_tuck");
+    toggle_field("internal_brick_seam_tuck_overlap", have_internal_brick_tuck);
+    toggle_field("internal_brick_seam_tuck_z_dip", have_internal_brick_tuck);
+    toggle_field("internal_brick_seam_tuck_wipe_distance", have_internal_brick_tuck);
+    toggle_field("internal_brick_seam_tuck_flow", have_internal_brick_tuck);
+    toggle_field("internal_brick_seam_tuck_retract", have_internal_brick_tuck);
     toggle_field("thin_walls", !have_arachne);
 
     toggle_field("scarf_seam_placement", !has_spiral_vase);

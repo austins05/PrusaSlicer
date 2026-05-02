@@ -1457,6 +1457,8 @@ void Print::_make_wipe_tower()
         // Don't generate any wipe tower.
         return;
 
+    WipeTower::ensure_wipe_volumes_cover_tools(wipe_volumes, m_config, m_wipe_tower_data.tool_ordering.all_extruders());
+
     // Check whether there are any layers in m_tool_ordering, which are marked with has_wipe_tower,
     // they print neither object, nor support. These layers are above the raft and below the object, and they
     // shall be added to the support layers to be printed.
@@ -1498,7 +1500,7 @@ void Print::_make_wipe_tower()
     WipeTower wipe_tower(model().wipe_tower().position.cast<float>(), model().wipe_tower().rotation, m_config, m_default_region_config, wipe_volumes, m_wipe_tower_data.tool_ordering.first_extruder());
 
     // Set the extruder & material properties at the wipe tower object.
-    for (size_t i = 0; i < m_config.nozzle_diameter.size(); ++ i)
+    for (size_t i = 0; i < std::max(m_config.nozzle_diameter.size(), wipe_volumes.size()); ++ i)
         wipe_tower.set_extruder(i, m_config);
 
     m_wipe_tower_data.priming = Slic3r::make_unique<std::vector<WipeTower::ToolChangeResult>>(

@@ -34,6 +34,7 @@ public:
     static const std::string never_skip_tag() { return "_GCODE_WIPE_TOWER_NEVER_SKIP_TAG"; }
 	static std::pair<double, double> get_wipe_tower_cone_base(double width, double height, double depth, double angle_deg);
 	static std::vector<std::vector<float>> extract_wipe_volumes(const PrintConfig& config);
+    static void ensure_wipe_volumes_cover_tools(std::vector<std::vector<float>> &wipe_volumes, const PrintConfig &config, const std::vector<unsigned int> &tools);
 
     struct Extrusion
     {

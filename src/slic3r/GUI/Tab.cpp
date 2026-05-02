@@ -1481,6 +1481,17 @@ void TabPrint::build()
         optgroup->append_single_option_line("staggered_perimeters");
         optgroup->append_single_option_line("staggered_perimeters_outer_wall_count");
         optgroup->append_single_option_line("staggered_perimeters_inner_extrusion_multiplier");
+        optgroup->append_single_option_line("external_inward_scarf_exit");
+        optgroup->append_single_option_line("external_inward_scarf_taper_length");
+        optgroup->append_single_option_line("external_inward_scarf_end_flow");
+        optgroup->append_single_option_line("external_inward_scarf_exit_distance");
+        optgroup->append_single_option_line("external_inward_scarf_retract");
+        optgroup->append_single_option_line("internal_brick_seam_tuck");
+        optgroup->append_single_option_line("internal_brick_seam_tuck_overlap");
+        optgroup->append_single_option_line("internal_brick_seam_tuck_z_dip");
+        optgroup->append_single_option_line("internal_brick_seam_tuck_wipe_distance");
+        optgroup->append_single_option_line("internal_brick_seam_tuck_flow");
+        optgroup->append_single_option_line("internal_brick_seam_tuck_retract");
 
         const std::string scarf_seam_path{"seam-position_151069#"};
         optgroup->append_single_option_line("scarf_seam_placement", scarf_seam_path + "scarf-joint-placement");

@@ -620,8 +620,8 @@ WipeTower::WipeTower(const Vec2f& pos, double rotation_deg, const PrintConfig& c
 
 void WipeTower::set_extruder(size_t idx, const PrintConfig& config)
 {
-    //while (m_filpar.size() < idx+1)   // makes sure the required element is in the vector
-    m_filpar.push_back(FilamentParameters());
+    if (m_filpar.size() <= idx)
+        m_filpar.resize(idx + 1);
 
     m_filpar[idx].material = config.filament_type.get_at(idx);
     m_filpar[idx].is_soluble = config.wipe_tower_extruder == 0 ? config.filament_soluble.get_at(idx) : (idx != size_t(config.wipe_tower_extruder - 1));
@@ -1522,6 +1522,33 @@ std::vector<std::vector<float>> WipeTower::extract_wipe_volumes(const PrintConfi
             wipe_volumes[i][j] = std::max<float>(wipe_volumes[i][j], config.filament_minimal_purge_on_wipe_tower.get_at(j));
 
     return wipe_volumes;
+}
+
+void WipeTower::ensure_wipe_volumes_cover_tools(std::vector<std::vector<float>> &wipe_volumes, const PrintConfig &config, const std::vector<unsigned int> &tools)
+{
+    if (tools.empty())
+        return;
+
+    const size_t tool_count = size_t(*std::max_element(tools.begin(), tools.end())) + 1;
+    if (wipe_volumes.size() >= tool_count)
+        return;
+
+    const size_t old_count = wipe_volumes.size();
+    wipe_volumes.resize(tool_count);
+    for (std::vector<float> &row : wipe_volumes)
+        row.resize(tool_count, 0.f);
+
+    for (size_t i = 0; i < tool_count; ++i) {
+        for (size_t j = 0; j < tool_count; ++j) {
+            if (i < old_count && j < old_count)
+                continue;
+
+            float volume = 0.f;
+            if (config.single_extruder_multi_material && !config.wiping_volumes_use_custom_matrix && i != j)
+                volume = float(config.multimaterial_purging.value * config.filament_purge_multiplier.get_at(j) / 100.);
+            wipe_volumes[i][j] = std::max<float>(volume, config.filament_minimal_purge_on_wipe_tower.get_at(j));
+        }
+    }
 }
 
 static float get_wipe_depth(float volume, float layer_height, float perimeter_width, float extra_flow, float extra_spacing, float width)
