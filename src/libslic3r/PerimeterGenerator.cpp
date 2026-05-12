@@ -419,13 +419,41 @@ static ClipperLib_Z::Paths clip_extrusion(const ClipperLib_Z::Path &subject, con
     return clipped_paths;
 }
 
-static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::Parameters &params, const Polygons &lower_slices_polygons_cache, Arachne::PerimeterOrder::PerimeterExtrusions &pg_extrusions)
+static int staggered_perimeters_normal_outer_wall_count(const PerimeterGenerator::Parameters &params)
+{
+    return std::max(1, params.object_config.staggered_perimeters_outer_wall_count.value);
+}
+
+static bool can_apply_staggered_perimeters(const PerimeterGenerator::Parameters &params, const size_t generated_perimeter_count)
+{
+    const int normal_outer_wall_count = staggered_perimeters_normal_outer_wall_count(params);
+    return params.object_config.staggered_perimeters
+        && params.number_of_layers >= 4
+        && params.object_config.perimeter_generator == PerimeterGeneratorType::Arachne
+        && generated_perimeter_count > size_t(normal_outer_wall_count);
+}
+
+static int staggered_perimeters_effective_perimeter_count(const PerimeterGenerator::Parameters &params)
+{
+    int perimeter_count = params.config.perimeters.value;
+    if (perimeter_count > 0 && params.object_config.staggered_perimeters && params.object_config.perimeter_generator == PerimeterGeneratorType::Arachne) {
+        const int min_perimeters_for_brick = staggered_perimeters_normal_outer_wall_count(params) + 1;
+        perimeter_count = std::max(perimeter_count, min_perimeters_for_brick);
+    }
+    return perimeter_count;
+}
+
+static ExtrusionEntityCollection traverse_extrusions(
+    const PerimeterGenerator::Parameters &params,
+    const Polygons                       &lower_slices_polygons_cache,
+    Arachne::PerimeterOrder::PerimeterExtrusions &pg_extrusions,
+    const bool                            apply_staggered)
 {
     using namespace Slic3r::Feature::FuzzySkin;
 
-    const auto apply_staggered_perimeters = [&params](ExtrusionPaths &paths, const size_t inset_idx) {
-        const size_t normal_outer_wall_count = std::max(1, params.object_config.staggered_perimeters_outer_wall_count.value);
-        if (!params.object_config.staggered_perimeters || inset_idx < normal_outer_wall_count || inset_idx % 2 == 0 || params.number_of_layers < 4)
+    const auto apply_staggered_perimeters = [&params](ExtrusionPaths &paths, const size_t inset_idx, const bool is_closed) {
+        const size_t normal_outer_wall_count = size_t(staggered_perimeters_normal_outer_wall_count(params));
+        if (!is_closed || inset_idx < normal_outer_wall_count || inset_idx % 2 == 0)
             return;
 
         const float inner_extrusion_multiplier = float(params.object_config.staggered_perimeters_inner_extrusion_multiplier.value / 100.);
@@ -542,7 +570,8 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
 
         // Append paths to collection.
         if (!paths.empty()) {
-            apply_staggered_perimeters(paths, extrusion.inset_idx);
+            if (apply_staggered)
+                apply_staggered_perimeters(paths, extrusion.inset_idx, extrusion.is_closed);
 
             if (extrusion.is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths));
@@ -1048,7 +1077,7 @@ void PerimeterGenerator::process_arachne(
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     // detect how many perimeters must be generated for this island
-    int loop_number = params.config.perimeters + surface.extra_perimeters - 1; // 0-indexed loops
+    int loop_number = staggered_perimeters_effective_perimeter_count(params) + surface.extra_perimeters - 1; // 0-indexed loops
     if (loop_number > 0 && ((params.config.top_one_perimeter_type == TopOnePerimeterType::TopmostOnly && upper_slices == nullptr) || (params.config.only_one_perimeter_first_layer && params.layer_id == 0)))
         loop_number = 0;
 
@@ -1144,18 +1173,19 @@ void PerimeterGenerator::process_arachne(
         return true;
     }());
 
+    const bool apply_staggered = can_apply_staggered_perimeters(params, perimeters.size());
     Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first);
-    if (params.object_config.staggered_perimeters) {
-        const size_t normal_outer_wall_count = std::max(1, params.object_config.staggered_perimeters_outer_wall_count.value);
+    if (apply_staggered) {
+        const size_t normal_outer_wall_count = size_t(staggered_perimeters_normal_outer_wall_count(params));
         std::stable_sort(ordered_extrusions.begin(), ordered_extrusions.end(),
             [normal_outer_wall_count](const Arachne::PerimeterOrder::PerimeterExtrusion &lhs, const Arachne::PerimeterOrder::PerimeterExtrusion &rhs) {
-                const bool lhs_staggered = lhs.extrusion.inset_idx >= normal_outer_wall_count && lhs.extrusion.inset_idx % 2 == 1;
-                const bool rhs_staggered = rhs.extrusion.inset_idx >= normal_outer_wall_count && rhs.extrusion.inset_idx % 2 == 1;
+                const bool lhs_staggered = lhs.is_closed() && lhs.extrusion.inset_idx >= normal_outer_wall_count && lhs.extrusion.inset_idx % 2 == 1;
+                const bool rhs_staggered = rhs.is_closed() && rhs.extrusion.inset_idx >= normal_outer_wall_count && rhs.extrusion.inset_idx % 2 == 1;
                 return lhs_staggered < rhs_staggered;
             });
     }
 
-    if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
+    if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions, apply_staggered); !extrusion_coll.empty())
         out_loops.append(extrusion_coll);
 
     const coord_t spacing = (perimeters.size() == 1) ? ext_perimeter_spacing2 : perimeter_spacing;

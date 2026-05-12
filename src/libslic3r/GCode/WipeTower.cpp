@@ -1589,10 +1589,7 @@ void WipeTower::plan_toolchange(float z_par, float layer_height_par, unsigned in
     float wiping_depth = get_wipe_depth(wipe_volume - first_wipe_volume, layer_height_par, m_perimeter_width, m_extra_flow, m_extra_spacing_wipe, width);
     
     const float required_depth = ramming_depth + wiping_depth;
-    const float capped_depth = m_wipe_tower_depth_config > 0.f ?
-        std::min(required_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width)) :
-        required_depth;
-	m_plan.back().tool_changes.push_back(WipeTowerInfo::ToolChange(old_tool, new_tool, capped_depth, ramming_depth, first_wipe_line, wipe_volume));
+	m_plan.back().tool_changes.push_back(WipeTowerInfo::ToolChange(old_tool, new_tool, required_depth, ramming_depth, first_wipe_line, wipe_volume));
 }
 
 
@@ -1609,8 +1606,6 @@ void WipeTower::plan_tower()
     for (int layer_index = int(m_plan.size()) - 1; layer_index >= 0; --layer_index)
 	{
 		float this_layer_depth = std::max(m_plan[layer_index].depth, m_plan[layer_index].toolchanges_depth());
-        if (m_wipe_tower_depth_config > 0.f)
-            this_layer_depth = std::min(this_layer_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width));
 		m_plan[layer_index].depth = this_layer_depth;
 		
 		if (this_layer_depth > m_wipe_tower_depth - m_perimeter_width)
@@ -1623,7 +1618,7 @@ void WipeTower::plan_tower()
 		}
 	}
     if (m_wipe_tower_depth_config > 0.f)
-        m_wipe_tower_depth = m_wipe_tower_depth_config;
+        m_wipe_tower_depth = std::max(m_wipe_tower_depth, m_wipe_tower_depth_config);
 }
 
 void WipeTower::save_on_last_wipe()
@@ -1654,9 +1649,7 @@ void WipeTower::save_on_last_wipe()
                 float depth_to_wipe = get_wipe_depth(volume_we_need_depth_for, m_layer_info->height, m_perimeter_width, m_extra_flow, m_extra_spacing_wipe, width);
 
                 const float required_depth = toolchange.ramming_depth + depth_to_wipe;
-                toolchange.required_depth = m_wipe_tower_depth_config > 0.f ?
-                    std::min(required_depth, std::max(0.f, m_wipe_tower_depth_config - m_perimeter_width)) :
-                    required_depth;
+                toolchange.required_depth = required_depth;
                 toolchange.wipe_volume = volume_left_to_wipe;
             }
         }

@@ -956,9 +956,10 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
             if (it != model_instance_to_print_instance.end() && it->first == model_instance)
                 instances.emplace_back(it->second);
         }
-    if (std::any_of(instances.begin(), instances.end(), [](const PrintInstance *instance) {
+    const bool has_explicit_order = std::any_of(instances.begin(), instances.end(), [](const PrintInstance *instance) {
         return instance->model_instance != nullptr && instance->model_instance->sequential_print_order > 0;
-    })) {
+    });
+    if (has_explicit_order) {
         std::vector<const PrintInstance*> explicit_order;
         explicit_order.reserve(instances.size());
         for (const PrintInstance *instance : instances)
@@ -997,6 +998,14 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
                 ordered[fill_idx] = instance;
         }
         instances = std::move(ordered);
+    } else {
+        std::stable_sort(instances.begin(), instances.end(), [](const PrintInstance *lhs, const PrintInstance *rhs) {
+            if (lhs == nullptr || rhs == nullptr)
+                return lhs != nullptr;
+            if (lhs->shift.y() != rhs->shift.y())
+                return lhs->shift.y() < rhs->shift.y();
+            return lhs->shift.x() < rhs->shift.x();
+        });
     }
     return instances;
 }
@@ -1264,6 +1273,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
         if (initial_extruder_id == static_cast<unsigned int>(-1))
             // No object to print was found, cancel the G-code export.
             throw Slic3r::SlicingError(_u8L("No extrusions were generated for objects."));
+        has_wipe_tower = print.has_wipe_tower() && tool_ordering.has_wipe_tower();
         // We don't allow switching of extruders per layer by Model::custom_gcode_per_print_z in sequential mode.
         // Use the extruder IDs collected from Regions.
         this->set_extruders(print.extruders());
@@ -1400,21 +1410,19 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
     // Do all objects for each layer.
     if (print.config().complete_objects.value) {
         size_t finished_objects = 0;
+        unsigned int current_extruder_id = initial_extruder_id;
         const Vec2f sequential_wipe_tower_anchor_shift =
             unscale((*print_object_instance_sequential_active)->shift).cast<float>();
-        const PrintObject *prev_object = (*print_object_instance_sequential_active)->print_object;
         for (; print_object_instance_sequential_active != print_object_instances_ordering.end(); ++ print_object_instance_sequential_active) {
             const PrintObject &object = *(*print_object_instance_sequential_active)->print_object;
-            if (&object != prev_object || tool_ordering.first_extruder() != final_extruder_id) {
-                tool_ordering = ToolOrdering(object, final_extruder_id);
-                unsigned int new_extruder_id = tool_ordering.first_extruder();
-                if (new_extruder_id == (unsigned int)-1)
-                    // Skip this object.
-                    continue;
-                initial_extruder_id = new_extruder_id;
-                final_extruder_id   = tool_ordering.last_extruder();
-                assert(final_extruder_id != (unsigned int)-1);
-            }
+            tool_ordering = ToolOrdering(object, current_extruder_id);
+            unsigned int new_extruder_id = tool_ordering.first_extruder();
+            if (new_extruder_id == (unsigned int)-1)
+                // Skip this object.
+                continue;
+            initial_extruder_id = new_extruder_id;
+            final_extruder_id   = tool_ordering.last_extruder();
+            assert(final_extruder_id != (unsigned int)-1);
             print.throw_if_canceled();
             this->set_origin(unscale((*print_object_instance_sequential_active)->shift));
             std::optional<SequentialWipeTowerData> sequential_wipe_tower_data;
@@ -1428,6 +1436,12 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                     wipe_tower_pos, print.model().wipe_tower().rotation, wipe_tower_config,
                     *sequential_wipe_tower_data->priming, sequential_wipe_tower_data->tool_changes,
                     *sequential_wipe_tower_data->final_purge);
+                if (finished_objects == 0 && print.config().single_extruder_multi_material_priming) {
+                    Vec3d new_position = this->writer().get_position();
+                    new_position.z() = first_layer_height;
+                    this->writer().update_position(new_position);
+                    file.write(m_wipe_tower->prime(*this));
+                }
             }
             if (finished_objects > 0) {
                 // Move to the origin position for the copy we're going to print.
@@ -1456,6 +1470,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                 this->_print_first_layer_extruder_temperatures(file, print, between_objects_gcode, initial_extruder_id, false);
                 file.writeln(between_objects_gcode);
             }
+            if (m_writer.extruder() == nullptr)
+                file.write(this->set_extruder(initial_extruder_id, first_layer_height));
             // Reset the cooling buffer internal state (the current position, feed rate, accelerations).
             m_cooling_buffer->reset(this->writer().get_position());
             m_cooling_buffer->set_current_extruder(initial_extruder_id);
@@ -1471,11 +1487,11 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                 *print_object_instance_sequential_active - object.instances().data(), 
                 smooth_path_cache_global, file);
             m_wipe_tower.reset();
+            current_extruder_id = final_extruder_id;
             ++ finished_objects;
             // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
             // Reset it when starting another object from 1st layer.
             m_second_layer_things_done = false;
-            prev_object = &object;
         }
 
         file.write(m_label_objects.maybe_stop_instance());
@@ -1589,9 +1605,12 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
     print.throw_if_canceled();
 
     // Get filament stats.
+    const bool has_global_wipe_tower_stats = has_wipe_tower &&
+        !print.config().complete_objects.value &&
+        !print.wipe_tower_data().used_filament_until_layer.empty();
     const std::string filament_stats_string_out = DoExport::update_print_stats_and_format_filament_stats(
         // Const inputs
-        has_wipe_tower, print.wipe_tower_data(),
+        has_global_wipe_tower_stats, print.wipe_tower_data(),
         this->config(),
         m_writer.extruders(),
         initial_extruder_id,
@@ -2545,6 +2564,63 @@ struct SmoothPathGenerator
     const PrintConfig &config;
     bool enable_loop_clipping;
 
+    static Geometry::ArcWelder::Path make_z_contoured_path(const ExtrusionPath &path, const bool reverse)
+    {
+        Geometry::ArcWelder::Path out;
+        if (path.z_offsets.size() != path.polyline.points.size())
+            return out;
+        out.reserve(path.polyline.points.size());
+        auto append_segment = [&out, &path](size_t idx) {
+            Geometry::ArcWelder::Segment segment;
+            segment.point = path.polyline.points[idx];
+            segment.height_fraction = 1.f + float(double(path.z_offsets[idx]) / scaled<double>(path.height()));
+            if (path.z_offsets_scale_extrusion && path.role() != ExtrusionRole::Ironing)
+                segment.e_fraction = std::max(0.05f, segment.height_fraction);
+            out.emplace_back(segment);
+        };
+        if (reverse) {
+            for (size_t i = path.polyline.points.size(); i > 0; --i)
+                append_segment(i - 1);
+        } else {
+            for (size_t i = 0; i < path.polyline.points.size(); ++i)
+                append_segment(i);
+        }
+        return out;
+    }
+
+    GCode::SmoothPath resolve_path(const ExtrusionPath &path, const bool reverse) const
+    {
+        if (path.z_contoured())
+            return GCode::SmoothPath{GCode::SmoothPathElement{path.attributes(), make_z_contoured_path(path, reverse)}};
+        return GCode::SmoothPath{GCode::SmoothPathElement{
+            path.attributes(),
+            smooth_path_caches.layer_local().resolve_or_fit(path, reverse, scaled_resolution)}};
+    }
+
+    GCode::SmoothPath resolve_multipath(const ExtrusionMultiPath &multipath, const bool reverse) const
+    {
+        const bool has_z_contours = std::any_of(multipath.paths.begin(), multipath.paths.end(), [](const ExtrusionPath &path) {
+            return path.z_contoured();
+        });
+        if (! has_z_contours)
+            return smooth_path_caches.layer_local().resolve_or_fit(multipath, reverse, scaled_resolution);
+
+        GCode::SmoothPath out;
+        out.reserve(multipath.paths.size());
+        if (reverse) {
+            for (auto it = multipath.paths.rbegin(); it != multipath.paths.rend(); ++it) {
+                GCode::SmoothPath path = resolve_path(*it, true);
+                append(out, std::move(path));
+            }
+        } else {
+            for (const ExtrusionPath &path_src : multipath.paths) {
+                GCode::SmoothPath path = resolve_path(path_src, false);
+                append(out, std::move(path));
+            }
+        }
+        return out;
+    }
+
     GCode::ExtrusionOrder::PathSmoothingResult operator()(
         const Layer *layer,
         const PrintRegion *region,
@@ -2603,14 +2679,9 @@ struct SmoothPathGenerator
 
             assert(validate_smooth_path(result, !enable_loop_clipping));
         } else if (auto multipath = dynamic_cast<const ExtrusionMultiPath *>(extrusion_entity)) {
-            result =
-                smooth_path_caches.layer_local()
-                    .resolve_or_fit(*multipath, extrusion_reference.flipped(), scaled_resolution);
+            result = resolve_multipath(*multipath, extrusion_reference.flipped());
         } else if (auto path = dynamic_cast<const ExtrusionPath *>(extrusion_entity)) {
-            result = GCode::SmoothPath{GCode::SmoothPathElement{
-                path->attributes(),
-                smooth_path_caches.layer_local()
-                    .resolve_or_fit(*path, extrusion_reference.flipped(), scaled_resolution)}};
+            result = resolve_path(*path, extrusion_reference.flipped());
         }
         for (auto it{result.rbegin()}; it != result.rend(); ++it) {
             if (!it->path.empty()) {

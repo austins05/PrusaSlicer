@@ -24,4 +24,5 @@ else ()
 
     add_library(hidapi INTERFACE)
     target_link_libraries(hidapi INTERFACE PkgConfig::HIDAPI)
+    target_link_libraries(hidapi INTERFACE udev)
 endif()

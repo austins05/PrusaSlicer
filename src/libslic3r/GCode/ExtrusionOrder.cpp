@@ -531,6 +531,25 @@ bool is_empty(const ExtruderExtrusions &extruder_extrusions) {
     return true;
 }
 
+std::optional<unsigned int> brim_extruder_for_layer(
+    const LayerTools &layer_tools,
+    const GCode::ObjectsLayerToPrint &layers,
+    const std::vector<InstanceToPrint> &instances_to_print
+) {
+    for (const InstanceToPrint &instance : instances_to_print) {
+        const Layer *layer = layers[instance.object_layer_to_print_id].object_layer;
+        if (layer == nullptr)
+            continue;
+
+        for (const LayerRegion *layerm : layer->regions()) {
+            if (!layerm->perimeters().empty())
+                return layer_tools.perimeter_extruder(layerm->region());
+        }
+    }
+
+    return std::nullopt;
+}
+
 
 std::vector<ExtruderExtrusions> get_extrusions(
     const Print &print,
@@ -546,6 +565,9 @@ std::vector<ExtruderExtrusions> get_extrusions(
     std::optional<Point> previous_position
 ) {
     unsigned toolchange_number{0};
+    std::optional<unsigned int> brim_extruder_id = get_brim ? brim_extruder_for_layer(layer_tools, layers, instances_to_print) : std::nullopt;
+    if (brim_extruder_id && !layer_tools.has_extruder(*brim_extruder_id))
+        brim_extruder_id.reset();
 
     std::vector<ExtruderExtrusions> extrusions;
     for (const unsigned int extruder_id : layer_tools.extruders)
@@ -582,8 +604,10 @@ std::vector<ExtruderExtrusions> get_extrusions(
             }
         }
 
-        // Extrude brim with the extruder of the 1st region.
-        if (get_brim) {
+        // Extrude brim with the object perimeter extruder, not necessarily the
+        // first tool on this layer. Wipe tower ordering may put support/soluble
+        // material first on the initial layer.
+        if (get_brim && (!brim_extruder_id || extruder_id == *brim_extruder_id)) {
             for (const ExtrusionEntity *entity : print.brim().entities) {
                 bool reverse{false};
                 bool is_loop{false};

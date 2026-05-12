@@ -115,6 +115,18 @@ static bool show_imgui_demo_window = false;
 namespace Slic3r {
 namespace GUI {
 
+static float sequential_wipe_tower_preview_width(const ConfigBase &config)
+{
+    const float width = config.has("wipe_tower_width") ? float(config.opt_float("wipe_tower_width")) : 5.f;
+    return std::abs(width - 60.f) < EPSILON ? 5.f : width;
+}
+
+static float sequential_wipe_tower_preview_depth(const ConfigBase &config)
+{
+    const float depth = config.has("wipe_tower_depth") ? float(config.opt_float("wipe_tower_depth")) : 15.f;
+    return depth <= 0.f ? 15.f : depth;
+}
+
 void GLCanvas3D::select_bed(int i, bool triggered_by_user)
 {
     int old_bed = s_multiple_beds.get_active_bed();
@@ -2746,8 +2758,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
         const bool wt = dynamic_cast<const ConfigOptionBool*>(m_config->option("wipe_tower"))->value;
         const bool co = dynamic_cast<const ConfigOptionBool*>(m_config->option("complete_objects"))->value;
         float w = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_width"))->value;
-        if (co && std::abs(w - 60.f) < EPSILON)
-            w = 5.f;
+        if (co)
+            w = sequential_wipe_tower_preview_width(*m_config);
         const float bw = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_brim_width"))->value;
         const float ca = dynamic_cast<const ConfigOptionFloat*>(m_config->option("wipe_tower_cone_angle"))->value;
 
@@ -2757,14 +2769,18 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
 
                 const Vec2d base_pos = m_model->get_wipe_tower_vector()[bed_idx].position;
                 const float a = m_model->get_wipe_tower_vector()[bed_idx].rotation;
-                const float depth = print->wipe_tower_data(extruders_count).depth;
-                const std::vector<std::pair<float, float>> z_and_depth_pairs = print->wipe_tower_data(extruders_count).z_and_depth_pairs;
+                const float depth = co ?
+                    sequential_wipe_tower_preview_depth(*m_config) :
+                    print->wipe_tower_data(extruders_count).depth;
+                std::vector<std::pair<float, float>> z_and_depth_pairs = print->wipe_tower_data(extruders_count).z_and_depth_pairs;
                 const float height_real = print->wipe_tower_data(extruders_count).height; // -1.f = unknown
                 const bool is_wipe_tower_step_done = print->is_step_done(psWipeTower);
 
                 // Height of a print (Show at least a slab).
                 const double height = height_real < 0.f ? std::max(m_model->max_z(), 10.0) : height_real;
                 if (depth != 0.) {
+                    if (co && is_wipe_tower_step_done && z_and_depth_pairs.size() < 2)
+                        z_and_depth_pairs = { { 0.f, depth }, { float(height), depth } };
                     std::vector<Vec2d> tower_positions;
                     if (co) {
                         std::vector<const PrintInstance*> instances = sort_object_instances_by_model_order(*print);

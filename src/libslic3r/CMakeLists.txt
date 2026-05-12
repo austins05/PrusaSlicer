@@ -60,6 +60,8 @@ set(SLIC3R_SOURCES
     Color.hpp
     Config.cpp
     Config.hpp
+    ContourZ.cpp
+    ContourZ.hpp
     CSGMesh/CSGMesh.hpp
     CSGMesh/SliceCSGMesh.hpp
     CSGMesh/ModelToCSGMesh.hpp

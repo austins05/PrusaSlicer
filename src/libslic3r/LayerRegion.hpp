@@ -107,10 +107,12 @@ public:
     // ordered collection of extrusion paths/loops to build all perimeters
     // (this collection contains only ExtrusionEntityCollection objects)
     [[nodiscard]] const ExtrusionEntityCollection&  perimeters() const { return m_perimeters; }
+    [[nodiscard]] ExtrusionEntityCollection&        perimeters()       { return m_perimeters; }
 
     // ordered collection of extrusion paths to fill surfaces
     // (this collection contains only ExtrusionEntityCollection objects)
     [[nodiscard]] const ExtrusionEntityCollection&  fills() const { return m_fills; }
+    [[nodiscard]] ExtrusionEntityCollection&        fills()       { return m_fills; }
 
     Flow    flow(FlowRole role) const;
     Flow    flow(FlowRole role, double layer_height) const;

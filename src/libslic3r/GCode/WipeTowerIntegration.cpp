@@ -115,6 +115,7 @@ std::string WipeTowerIntegration::append_tcr(GCodeGenerator &gcodegen, const Wip
 
     if (gcodegen.config().default_acceleration > 0)
         gcode += gcodegen.writer().set_print_acceleration(fast_round_up<unsigned int>(gcodegen.config().wipe_tower_acceleration.value));
+    gcode += ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role) + gcode_extrusion_role_to_string(GCodeExtrusionRole::WipeTower) + "\n";
     gcode += tcr_gcode;
     gcode += gcodegen.writer().set_print_acceleration(fast_round_up<unsigned int>(gcodegen.config().default_acceleration.value));
 
@@ -265,6 +266,12 @@ std::string WipeTowerIntegration::tool_change(GCodeGenerator &gcodegen, int extr
                 ignore_sparse = (layer_tool_changes.size() == 1 && layer_tool_changes.front().initial_tool == layer_tool_changes.front().new_tool && m_layer_idx != 0);
                 if (m_tool_change_idx == 0 && !ignore_sparse)
                     wipe_tower_z = m_last_wipe_tower_print_z + layer_tool_changes.front().layer_height;
+            } else if (m_layer_idx == 0 && !gcodegen.m_moved_to_first_layer_point) {
+                // In sequential mode the first wipe tower can be emitted before
+                // travel_to_first_position() has moved the nozzle down to the
+                // object's first layer. Do not print a sparse first tower at the
+                // start G-code parking Z.
+                wipe_tower_z = layer_tool_changes[m_tool_change_idx].print_z + gcodegen.config().z_offset.value;
             }
 
             if (!ignore_sparse) {

@@ -480,6 +480,8 @@ static std::vector<std::string> s_Preset_print_options {
     "internal_brick_seam_tuck_wipe_distance", "internal_brick_seam_tuck_flow", "internal_brick_seam_tuck_retract",
     "staggered_perimeters", "staggered_perimeters_outer_wall_count",
     "staggered_perimeters_inner_extrusion_multiplier", "seam_gap_distance",
+    "zaa_enabled", "zaa_min_z", "zaa_resolution", "zaa_max_segment_z_delta", "zaa_region_disable",
+    "z_stitching", "z_stitching_amplitude", "z_stitching_spacing", "z_stitching_min_foundation_z",
     "external_perimeters_first", "fill_density", "fill_pattern", "top_fill_pattern", "bottom_fill_pattern",
     "scarf_seam_placement", "scarf_seam_only_on_smooth", "scarf_seam_start_height", "scarf_seam_entire_loop", "scarf_seam_length", "scarf_seam_max_segment_length", "scarf_seam_on_inner_perimeters",
     "infill_every_layers", /*"infill_only_where_needed",*/ "solid_infill_every_layers", "fill_angle", "bridge_angle",

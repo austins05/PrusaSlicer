@@ -515,6 +515,10 @@ static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
 		const int b_rank = group_rank(b);
 		if (a_rank >= 0 && b_rank >= 0)
 			return a_rank < b_rank;
+		if (a_rank >= 0)
+			return true;
+		if (b_rank >= 0)
+			return false;
 		return a.first.id < b.first.id;
 	});
 	std::vector<Sequential::ObjectToPrint> objects_out;
@@ -780,6 +784,33 @@ std::optional<std::pair<std::string, std::string> > check_seq_conflict(const Pri
 
 	std::optional<std::pair<int,int>> conflict = Sequential::check_ScheduledObjectsForSequentialConflict(solver_config, printer_geometry, objects, std::vector<Sequential::ScheduledPlate>(1, plate));
 	if (conflict) {
+		if (config.has("extruder_clearance_radius")) {
+			const double clearance_radius = config.opt_float("extruder_clearance_radius");
+			if (clearance_radius > 0.5) {
+				DynamicPrintConfig relaxed_config(config);
+				relaxed_config.set("extruder_clearance_radius", std::max(0.0, clearance_radius - 0.5));
+				Sequential::PrinterGeometry relaxed_printer_geometry = get_printer_geometry(relaxed_config);
+				Sequential::SolverConfiguration relaxed_solver_config = get_solver_config(relaxed_printer_geometry);
+				std::vector<Sequential::ObjectToPrint> relaxed_objects = get_objects_to_print(print.model(), relaxed_printer_geometry, -1, std::nullopt, relaxed_config);
+
+				Sequential::ScheduledPlate relaxed_plate;
+				for (const PrintInstance* instance : sort_object_instances_by_model_order(print)) {
+					if (instance == nullptr || instance->model_instance == nullptr)
+						continue;
+
+					auto it = std::find_if(relaxed_objects.begin(), relaxed_objects.end(), [instance](const Sequential::ObjectToPrint& otp) {
+						return otp.id == instance->model_instance->id().id;
+					});
+					if (it != relaxed_objects.end())
+						relaxed_plate.scheduled_objects.emplace_back(instance->model_instance->id().id, instance->shift.x(), instance->shift.y());
+				}
+
+				if (!Sequential::check_ScheduledObjectsForSequentialConflict(
+						relaxed_solver_config, relaxed_printer_geometry, relaxed_objects, std::vector<Sequential::ScheduledPlate>(1, relaxed_plate)))
+					return std::nullopt;
+			}
+		}
+
 		std::pair<std::string, std::string> names;
 		for (const ModelObject* mo : print.model().objects)
 			for (const ModelInstance* mi : mo->instances) {

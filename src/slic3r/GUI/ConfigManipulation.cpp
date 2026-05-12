@@ -289,7 +289,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
                     "internal_brick_seam_tuck", "internal_brick_seam_tuck_overlap", "internal_brick_seam_tuck_z_dip",
                     "internal_brick_seam_tuck_wipe_distance", "internal_brick_seam_tuck_flow", "internal_brick_seam_tuck_retract",
                     "staggered_perimeters", "staggered_perimeters_outer_wall_count",
-                    "staggered_perimeters_inner_extrusion_multiplier", "external_perimeters_first", "external_perimeter_extrusion_width",
+                    "staggered_perimeters_inner_extrusion_multiplier",
+                    "zaa_enabled", "zaa_min_z", "zaa_resolution", "zaa_max_segment_z_delta", "zaa_region_disable",
+                    "z_stitching", "z_stitching_amplitude", "z_stitching_spacing", "z_stitching_min_foundation_z",
+                    "external_perimeters_first", "external_perimeter_extrusion_width",
                     "perimeter_speed", "small_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
         toggle_field(el, have_perimeters);
 
@@ -430,6 +433,15 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     toggle_field("internal_brick_seam_tuck_wipe_distance", have_internal_brick_tuck);
     toggle_field("internal_brick_seam_tuck_flow", have_internal_brick_tuck);
     toggle_field("internal_brick_seam_tuck_retract", have_internal_brick_tuck);
+    const bool have_zaa = config->opt_bool("zaa_enabled");
+    toggle_field("zaa_min_z", have_zaa);
+    toggle_field("zaa_resolution", have_zaa);
+    toggle_field("zaa_max_segment_z_delta", have_zaa);
+    toggle_field("zaa_region_disable", have_zaa);
+    const bool have_z_stitching = config->opt_bool("z_stitching");
+    toggle_field("z_stitching_amplitude", have_z_stitching);
+    toggle_field("z_stitching_spacing", have_z_stitching);
+    toggle_field("z_stitching_min_foundation_z", have_z_stitching);
     toggle_field("thin_walls", !have_arachne);
 
     toggle_field("scarf_seam_placement", !has_spiral_vase);

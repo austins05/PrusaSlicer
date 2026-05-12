@@ -5013,15 +5013,16 @@ void ObjectList::set_sequential_print_order_for_selected_items()
         if (!is_orderable_item(item))
             continue;
 
-        const ItemType type = m_objects_model->GetItemType(item);
         const int obj_idx = m_objects_model->GetObjectIdByItem(item);
         const ModelObject* obj = object(obj_idx);
         if (obj == nullptr || obj->instances.empty())
             continue;
 
-        const int inst_idx = type == itObject ? 0 : m_objects_model->GetInstanceIdByItem(item);
+        const int inst_idx = m_objects_model->GetInstanceIdByItem(item);
         if (inst_idx >= 0 && inst_idx < int(obj->instances.size()))
             current_order = obj->instances[inst_idx]->sequential_print_order;
+        else if (!obj->instances.empty())
+            current_order = obj->instances.front()->sequential_print_order;
         break;
     }
 
@@ -5040,7 +5041,6 @@ void ObjectList::set_sequential_print_order_for_selected_items()
         if (!is_orderable_item(item))
             continue;
 
-        const ItemType type = m_objects_model->GetItemType(item);
         const int obj_idx = m_objects_model->GetObjectIdByItem(item);
         ModelObject* obj = object(obj_idx);
         if (obj == nullptr)
@@ -5048,8 +5048,8 @@ void ObjectList::set_sequential_print_order_for_selected_items()
 
         obj_idxs.emplace_back(static_cast<size_t>(obj_idx));
 
-        if (type == itInstance) {
-            const int inst_idx = m_objects_model->GetInstanceIdByItem(item);
+        const int inst_idx = m_objects_model->GetInstanceIdByItem(item);
+        if (inst_idx >= 0) {
             if (inst_idx >= 0 && inst_idx < int(obj->instances.size()))
                 obj->instances[inst_idx]->sequential_print_order = int(order);
         } else {

@@ -58,6 +58,10 @@ LayerPtrs new_layers(
         coordf_t lo = object_layers[i_layer];
         coordf_t hi = object_layers[i_layer + 1];
         coordf_t slice_z = 0.5 * (lo + hi);
+        if (print_object->config().zaa_enabled) {
+            const coordf_t zaa_min_z = std::clamp(print_object->config().zaa_min_z.value, 0., hi - lo);
+            slice_z = lo + zaa_min_z;
+        }
         Layer *layer = new Layer(id ++, print_object, hi - lo, hi + zmin, slice_z);
         out.emplace_back(layer);
         if (prev != nullptr) {

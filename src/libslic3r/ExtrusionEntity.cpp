@@ -32,11 +32,14 @@ void ExtrusionPath::subtract_expolygons(const ExPolygons &collection, ExtrusionE
 
 void ExtrusionPath::clip_end(double distance)
 {
+    assert(! this->z_contoured());
     this->polyline.clip_end(distance);
 }
 
 void ExtrusionPath::simplify(double tolerance)
 {
+    if (this->z_contoured())
+        return;
     this->polyline.simplify(tolerance);
 }
 

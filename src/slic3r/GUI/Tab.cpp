@@ -1492,6 +1492,15 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_brick_seam_tuck_wipe_distance");
         optgroup->append_single_option_line("internal_brick_seam_tuck_flow");
         optgroup->append_single_option_line("internal_brick_seam_tuck_retract");
+        optgroup->append_single_option_line("zaa_enabled");
+        optgroup->append_single_option_line("zaa_min_z");
+        optgroup->append_single_option_line("zaa_resolution");
+        optgroup->append_single_option_line("zaa_max_segment_z_delta");
+        optgroup->append_single_option_line("zaa_region_disable");
+        optgroup->append_single_option_line("z_stitching");
+        optgroup->append_single_option_line("z_stitching_amplitude");
+        optgroup->append_single_option_line("z_stitching_spacing");
+        optgroup->append_single_option_line("z_stitching_min_foundation_z");
 
         const std::string scarf_seam_path{"seam-position_151069#"};
         optgroup->append_single_option_line("scarf_seam_placement", scarf_seam_path + "scarf-joint-placement");

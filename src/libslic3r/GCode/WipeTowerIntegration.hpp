@@ -45,15 +45,19 @@ public:
     std::string finalize(GCodeGenerator &gcodegen);
     std::vector<float> used_filament_length() const;
     std::optional<WipeTower::ToolChangeResult> get_toolchange(std::size_t index, bool ignore_sparse) const {
-        if (m_layer_idx >= m_tool_changes.size()) {
+        if (m_layer_idx < 0 || size_t(m_layer_idx) >= m_tool_changes.size()) {
+            return std::nullopt;
+        }
+        const std::vector<WipeTower::ToolChangeResult> &layer_tool_changes = m_tool_changes[m_layer_idx];
+        if (index >= layer_tool_changes.size()) {
             return std::nullopt;
         }
         if(
             ignore_sparse
-            && m_tool_changes.at(m_layer_idx).size() == 1
+            && layer_tool_changes.size() == 1
             && (
-                m_tool_changes.at(m_layer_idx).front().initial_tool
-                == m_tool_changes.at(m_layer_idx).front().new_tool
+                layer_tool_changes.front().initial_tool
+                == layer_tool_changes.front().new_tool
             )
             && m_layer_idx != 0
         ) {
@@ -61,7 +65,7 @@ public:
             return std::nullopt;
         }
 
-        return m_tool_changes.at(m_layer_idx).at(index);
+        return layer_tool_changes[index];
     }
 
     Vec2f transform_wt_pt(const Vec2f& pt) const {

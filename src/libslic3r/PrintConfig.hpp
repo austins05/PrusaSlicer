@@ -676,6 +676,14 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,             staggered_perimeters_inner_extrusion_multiplier))
     ((ConfigOptionInt,                 staggered_perimeters_outer_wall_count))
     ((ConfigOptionBool,                staggered_perimeters))
+    ((ConfigOptionBool,                zaa_enabled))
+    ((ConfigOptionFloat,               zaa_max_segment_z_delta))
+    ((ConfigOptionFloat,               zaa_min_z))
+    ((ConfigOptionFloat,               zaa_resolution))
+    ((ConfigOptionBool,                z_stitching))
+    ((ConfigOptionFloat,               z_stitching_amplitude))
+    ((ConfigOptionFloat,               z_stitching_min_foundation_z))
+    ((ConfigOptionFloat,               z_stitching_spacing))
 //  ((ConfigOptionFloat,               seam_preferred_direction))
 //  ((ConfigOptionFloat,               seam_preferred_direction_jitter))
     ((ConfigOptionFloat,               slice_closing_radius))
@@ -816,6 +824,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                    scarf_seam_length))
     ((ConfigOptionFloat,                    scarf_seam_max_segment_length))
     ((ConfigOptionBool,                     scarf_seam_on_inner_perimeters))
+    ((ConfigOptionBool,                     zaa_region_disable))
 )
 
 PRINT_CONFIG_CLASS_DEFINE(

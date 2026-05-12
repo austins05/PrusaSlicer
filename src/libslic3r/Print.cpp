@@ -467,6 +467,14 @@ std::string Print::validate(std::vector<std::string>* warnings) const
 
         if (!this->has_same_shrinkage_compensations())
             warnings->emplace_back("_FILAMENT_SHRINKAGE_DIFFER");
+
+        for (const PrintObject *object : m_objects) {
+            if (object->config().staggered_perimeters && object->config().perimeter_generator != PerimeterGeneratorType::Arachne) {
+                warnings->emplace_back(_u8L("Brick layer perimeters require the Arachne perimeter generator. "
+                    "Switch Print Settings > Layers and perimeters > Perimeter generator to Arachne, or brick layers will not be generated."));
+                break;
+            }
+        }
     }
 
     if (m_objects.empty())
@@ -908,7 +916,7 @@ void Print::process()
         for (size_t idx = range.begin(); idx < range.end(); ++idx) {
             m_objects[idx]->make_perimeters();
             m_objects[idx]->infill();
-            m_objects[idx]->ironing();
+            m_objects[idx]->contour_z();
         }
     }, tbb::simple_partitioner());
 

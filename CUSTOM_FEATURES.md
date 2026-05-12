@@ -22,6 +22,10 @@ Brick layers are available through the staggered perimeter settings. The impleme
 
 The custom flow controls allow the inner brick-layer perimeter extrusion multiplier to be tuned separately from the outer wall count. This makes it possible to keep the visible outer walls normal while increasing internal brick-layer bonding flow.
 
+When brick layers are enabled with Arachne and the configured perimeter count is not higher than the normal outer wall count, slicing automatically requests one additional perimeter so there is a protected normal outer wall and a real inner brick wall. Open or partial Arachne helper paths are never staggered as brick paths.
+
+If brick layers are enabled with the classic perimeter generator, PrusaSlicer shows a validation warning because classic perimeters do not generate brick-layer paths.
+
 ## Experimental Seam Cleanup
 
 All seam cleanup settings default to off and are under print settings in the perimeter advanced controls.
@@ -55,9 +59,49 @@ Settings:
 
 The intent is to hide seam buildup inside the part where the brick-layer geometry is already internal.
 
+## Experimental ZAA Surface Contouring
+
+ZAA surface contouring is an off-by-default experimental option adapted from the BambuStudio-ZAA / OrcaSlicer idea. It varies Z along eligible top solid infill and ironing extrusion paths so the nozzle can follow shallow model surfaces instead of printing every surface as a flat staircase.
+
+Settings:
+
+- ZAA surface contouring
+- ZAA minimum layer thickness
+- ZAA sample spacing
+- ZAA max segment Z change
+- Disable ZAA in this region
+
+Implementation notes:
+
+- The slicer uses a lower slice plane while ZAA is enabled so top-surface infill exists close enough to the mesh surface to contour safely.
+- Extrusion paths remain 2D internally with a per-point Z-offset sidecar, avoiding the broader 3D path rewrite used by the original ZAA branch.
+- G-code output uses existing variable-Z extrusion support and bypasses arc fitting only for contoured paths.
+- Safety checks keep the feature limited to solid top-like regions and ironing, require mostly valid upward-facing mesh hits, clamp segment-to-segment Z changes, skip bridges/supports/wipe tower paths, and leave paths planar when checks fail.
+- Output is unchanged when ZAA is disabled.
+
+## Experimental Z Stitching
+
+Z stitching is an off-by-default experimental print setting that varies Z up and down along eligible internal extrusion paths. The goal is to mechanically stitch adjacent layers together instead of depositing every internal line as a perfectly planar bead.
+
+Settings:
+
+- Z stitching
+- Z stitching amplitude
+- Z stitching spacing
+- Z stitching minimum foundation
+
+Safety behavior:
+
+- Z stitching amplitude is capped at +/-0.1 mm.
+- Z stitching peak spacing cannot be below 1.25 mm.
+- Stitching is disabled until enough material has already been printed, and the actual stitched nozzle Z is not allowed below the configured minimum foundation height.
+- External perimeters, visible top paths, ironing, bridges, supports, skirt/brim, wipe tower paths, and paths already using ZAA offsets are skipped.
+- Z stitching does not scale extrusion flow with the Z offset. That is intentional: unlike ZAA, this is a mechanical path modulation rather than a variable layer-thickness compensation.
+- Output is unchanged when Z stitching is disabled.
+
 ## Tullomer Profile Work
 
-The local configuration includes a Tullomer filament profile adapted from the available Tullomer guidance and the Qidi Plus 4 high-temperature setup. That profile work lives in the local PrusaSlicer configuration rather than this source tree.
+The local configuration includes a Tullomer filament profile adapted from the available Tullomer guidance and the Qidi Plus 4 high-temperature setup. The active 0.02 mm Tullomer test preset enables Z stitching at 0.1 mm amplitude, 1.25 mm spacing, and a 0.35 mm minimum foundation height. That profile work lives in the local PrusaSlicer configuration rather than this source tree.
 
 ## Current Notes
 

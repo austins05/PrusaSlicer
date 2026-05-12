@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <optional>
 #include <string_view>
+#include <algorithm>
 #include <numeric>
 #include <cmath>
 #include <limits>
@@ -173,26 +174,31 @@ class ExtrusionPath : public ExtrusionEntity
 {
 public:
     Polyline polyline;
+    // Per-vertex Z offsets in scaled coordinates, aligned with polyline.points.
+    // Empty means the path is planar and follows the nominal layer Z.
+    std::vector<coord_t> z_offsets;
+    bool z_offsets_scale_extrusion{ true };
 
     ExtrusionPath(ExtrusionRole role) : m_attributes{ role } {}
     ExtrusionPath(const ExtrusionAttributes &attributes) : m_attributes(attributes) {}
-    ExtrusionPath(const ExtrusionPath &rhs) : polyline(rhs.polyline), m_attributes(rhs.m_attributes) {}
-    ExtrusionPath(ExtrusionPath &&rhs) : polyline(std::move(rhs.polyline)), m_attributes(rhs.m_attributes) {}
+    ExtrusionPath(const ExtrusionPath &rhs) : polyline(rhs.polyline), z_offsets(rhs.z_offsets), z_offsets_scale_extrusion(rhs.z_offsets_scale_extrusion), m_attributes(rhs.m_attributes) {}
+    ExtrusionPath(ExtrusionPath &&rhs) : polyline(std::move(rhs.polyline)), z_offsets(std::move(rhs.z_offsets)), z_offsets_scale_extrusion(rhs.z_offsets_scale_extrusion), m_attributes(rhs.m_attributes) {}
     ExtrusionPath(const Polyline &polyline, const ExtrusionAttributes &attribs) : polyline(polyline), m_attributes(attribs) {}
     ExtrusionPath(Polyline &&polyline, const ExtrusionAttributes &attribs) : polyline(std::move(polyline)), m_attributes(attribs) {}
 
-    ExtrusionPath& operator=(const ExtrusionPath &rhs) { this->polyline = rhs.polyline; m_attributes = rhs.m_attributes; return *this; }
-    ExtrusionPath& operator=(ExtrusionPath &&rhs) { this->polyline = std::move(rhs.polyline); m_attributes = rhs.m_attributes; return *this; }
+    ExtrusionPath& operator=(const ExtrusionPath &rhs) { this->polyline = rhs.polyline; this->z_offsets = rhs.z_offsets; this->z_offsets_scale_extrusion = rhs.z_offsets_scale_extrusion; m_attributes = rhs.m_attributes; return *this; }
+    ExtrusionPath& operator=(ExtrusionPath &&rhs) { this->polyline = std::move(rhs.polyline); this->z_offsets = std::move(rhs.z_offsets); this->z_offsets_scale_extrusion = rhs.z_offsets_scale_extrusion; m_attributes = rhs.m_attributes; return *this; }
 
 	ExtrusionEntity* clone() const override { return new ExtrusionPath(*this); }
     // Create a new object, initialize it with this object using the move semantics.
 	ExtrusionEntity* clone_move() override { return new ExtrusionPath(std::move(*this)); }
-    void reverse() override { this->polyline.reverse(); }
+    void reverse() override { this->polyline.reverse(); std::reverse(this->z_offsets.begin(), this->z_offsets.end()); }
     const Point& first_point() const override { return this->polyline.points.front(); }
     const Point& last_point() const override { return this->polyline.points.back(); }
     const Point& middle_point() const override { return this->polyline.points[this->polyline.size() / 2]; }
     size_t size() const { return this->polyline.size(); }
     bool empty() const { return this->polyline.empty(); }
+    bool z_contoured() const { return ! this->z_offsets.empty(); }
     bool is_closed() const { return ! this->empty() && this->polyline.points.front() == this->polyline.points.back(); }
     // Produce a list of extrusion paths into retval by clipping this path by ExPolygons.
     // Currently not used.

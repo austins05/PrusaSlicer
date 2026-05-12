@@ -3027,6 +3027,78 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("zaa_enabled", coBool);
+    def->label = L("ZAA surface contouring");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Experimental. Varies Z on eligible top solid infill and ironing paths so the nozzle follows shallow model surfaces. Disabled by default.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("zaa_min_z", coFloat);
+    def->label = L("ZAA minimum layer thickness");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Minimum remaining layer thickness allowed while contouring a path in Z.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.02;
+    def->max = 0.2;
+    def->set_default_value(new ConfigOptionFloat(0.05));
+
+    def = this->add("zaa_resolution", coFloat);
+    def->label = L("ZAA sample spacing");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Maximum distance between ZAA samples along eligible extrusion paths.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.05;
+    def->max = 0.5;
+    def->set_default_value(new ConfigOptionFloat(0.1));
+
+    def = this->add("zaa_max_segment_z_delta", coFloat);
+    def->label = L("ZAA max segment Z change");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Safety limit for the Z change between neighboring ZAA samples. Paths exceeding this are left planar.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.01;
+    def->max = 0.2;
+    def->set_default_value(new ConfigOptionFloat(0.05));
+
+    def = this->add("z_stitching", coBool);
+    def->label = L("Z stitching");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Experimental. Moves Z slightly up and down along eligible internal extrusion paths to mechanically stitch layers together. Disabled by default.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("z_stitching_amplitude", coFloat);
+    def->label = L("Z stitching amplitude");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Maximum Z movement above or below the nominal layer height for Z stitching.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.;
+    def->max = 0.1;
+    def->set_default_value(new ConfigOptionFloat(0.05));
+
+    def = this->add("z_stitching_spacing", coFloat);
+    def->label = L("Z stitching spacing");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Minimum distance between alternating Z stitching peaks.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 1.25;
+    def->set_default_value(new ConfigOptionFloat(1.25));
+
+    def = this->add("z_stitching_min_foundation_z", coFloat);
+    def->label = L("Z stitching minimum foundation");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Minimum amount of already printed plastic below the current layer before Z stitching is allowed.");
+    def->sidetext = L("mm");
+    def->mode = comExpert;
+    def->min = 0.35;
+    def->set_default_value(new ConfigOptionFloat(0.35));
+
     def = this->add("scarf_seam_placement", coEnum);
     def->label = L("Scarf joint placement");
     def->category = L("Layers and Perimeters");
@@ -3088,6 +3160,13 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Use scarf joint on inner perimeters.");
     def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("zaa_region_disable", coBool);
+    def->label = L("Disable ZAA in this region");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Prevents ZAA surface contouring from being applied to this print region.");
+    def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
 #if 0
@@ -3957,7 +4036,7 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("wipe_tower_depth", coFloat);
     def->label = L("Depth");
-    def->tooltip = L("Maximum depth of a wipe tower. Set to zero to let PrusaSlicer calculate the depth from the purging volumes.");
+    def->tooltip = L("Preferred depth of a wipe tower. The tower may grow if the purging volume would otherwise extrude outside the tower outline. Set to zero to let PrusaSlicer calculate the depth from the purging volumes.");
     def->sidetext = L("mm");
     def->mode = comAdvanced;
     def->min = 0.;

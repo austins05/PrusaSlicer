@@ -55,6 +55,18 @@
 namespace Slic3r {
 namespace GUI {
 
+static float sequential_wipe_tower_preview_width(const PrintConfig &config)
+{
+    const float width = float(config.wipe_tower_width.value);
+    return std::abs(width - 60.f) < EPSILON ? 5.f : width;
+}
+
+static float sequential_wipe_tower_preview_depth(const PrintConfig &config)
+{
+    const float depth = float(config.wipe_tower_depth.value);
+    return depth <= 0.f ? 15.f : depth;
+}
+
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
 void GCodeViewer::COG::render(bool fixed_screen_size)
 #else
@@ -1830,13 +1842,19 @@ void GCodeViewer::load_wipetower_shell(const Print& print)
         const size_t extruders_count = get_extruders_count();
         if (extruders_count > 1 && config.wipe_tower) {
             const WipeTowerData& wipe_tower_data = print.wipe_tower_data(extruders_count);
-            const float depth = wipe_tower_data.depth;
-            const std::vector<std::pair<float, float>> z_and_depth_pairs = print.wipe_tower_data(extruders_count).z_and_depth_pairs;
-            const float brim_width = wipe_tower_data.brim_width;
+            const float depth = config.complete_objects.value ?
+                sequential_wipe_tower_preview_depth(config) :
+                wipe_tower_data.depth;
+            std::vector<std::pair<float, float>> z_and_depth_pairs = print.wipe_tower_data(extruders_count).z_and_depth_pairs;
+            const float brim_width = config.complete_objects.value ?
+                float(config.wipe_tower_brim_width.value) :
+                wipe_tower_data.brim_width;
             if (depth != 0.) {
-                float width = float(config.wipe_tower_width.value);
-                if (config.complete_objects.value && std::abs(width - 60.f) < EPSILON)
-                    width = 5.f;
+                float width = config.complete_objects.value ?
+                    sequential_wipe_tower_preview_width(config) :
+                    float(config.wipe_tower_width.value);
+                if (config.complete_objects.value && z_and_depth_pairs.size() < 2)
+                    z_and_depth_pairs = { { 0.f, depth }, { float(max_z), depth } };
                 std::vector<Vec2d> tower_positions;
                 const Vec2d base_pos = wxGetApp().plater()->model().wipe_tower().position;
                 if (config.complete_objects.value) {

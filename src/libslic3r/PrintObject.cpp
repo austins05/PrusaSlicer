@@ -58,6 +58,7 @@
 #include "admesh/stl.h"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/ContourZ.hpp"
 #include "libslic3r/LayerRegion.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/MultiMaterialSegmentation.hpp"
@@ -488,6 +489,17 @@ void PrintObject::ironing()
     }
 }
 
+void PrintObject::contour_z()
+{
+    this->ironing();
+
+    if (this->set_started(posZContour)) {
+        m_print->set_status(50, _u8L("Applying Z contouring and stitching"));
+        ContourZ::contour_object(*this);
+        this->set_done(posZContour);
+    }
+}
+
 void PrintObject::generate_support_spots()
 {
     if (this->set_started(posSupportSpotsSearch)) {
@@ -761,6 +773,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "raft_contact_distance"
             || opt_key == "slice_closing_radius"
             || opt_key == "slicing_mode"
+            || opt_key == "zaa_enabled"
+            || opt_key == "zaa_min_z"
+            || opt_key == "z_stitching_min_foundation_z"
             || opt_key == "interlocking_beam"
             || opt_key == "interlocking_orientation"
             || opt_key == "interlocking_beam_layer_count"
@@ -930,6 +945,14 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "top_solid_infill_speed") {
             invalidated |= m_print->invalidate_step(psGCodeExport);
         } else if (
+               opt_key == "zaa_resolution"
+            || opt_key == "zaa_max_segment_z_delta"
+            || opt_key == "zaa_region_disable"
+            || opt_key == "z_stitching"
+            || opt_key == "z_stitching_amplitude"
+            || opt_key == "z_stitching_spacing") {
+            steps.emplace_back(posZContour);
+        } else if (
                opt_key == "wipe_into_infill"
             || opt_key == "wipe_into_objects"
             || opt_key == "infill_speed"
@@ -962,15 +985,17 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
     
     // propagate to dependent steps
     if (step == posPerimeters) {
-		invalidated |= this->invalidate_steps({ posPrepareInfill, posInfill, posIroning,  posSupportSpotsSearch, posEstimateCurledExtrusions, posCalculateOverhangingPerimeters });
+		invalidated |= this->invalidate_steps({ posPrepareInfill, posInfill, posIroning, posZContour, posSupportSpotsSearch, posEstimateCurledExtrusions, posCalculateOverhangingPerimeters });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posPrepareInfill) {
-        invalidated |= this->invalidate_steps({ posInfill, posIroning, posSupportSpotsSearch});
+        invalidated |= this->invalidate_steps({ posInfill, posIroning, posZContour, posSupportSpotsSearch});
     } else if (step == posInfill) {
-        invalidated |= this->invalidate_steps({ posIroning, posSupportSpotsSearch });
+        invalidated |= this->invalidate_steps({ posIroning, posZContour, posSupportSpotsSearch });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
+    } else if (step == posIroning) {
+        invalidated |= this->invalidate_steps({ posZContour, posSupportSpotsSearch });
     } else if (step == posSlice) {
-        invalidated |= this->invalidate_steps({posPerimeters, posPrepareInfill, posInfill, posIroning, posSupportSpotsSearch,
+        invalidated |= this->invalidate_steps({posPerimeters, posPrepareInfill, posInfill, posIroning, posZContour, posSupportSpotsSearch,
                                                posSupportMaterial, posEstimateCurledExtrusions, posCalculateOverhangingPerimeters});
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
         m_slicing_params.valid = false;
