@@ -8,6 +8,7 @@
 #include <functional>
 #include <iomanip>
 #include <sstream>
+#include <cstdint>
 
 #include <wx/frame.h>
 #include <wx/progdlg.h>
@@ -23,6 +24,7 @@
 #include <wx/wupdlock.h>
 #include <wx/debug.h>
 #include <wx/msgdlg.h>
+#include <wx/utils.h>
 
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem.hpp>
@@ -58,6 +60,13 @@ static const char *CONFIG_KEY_BAMBU_FLOW_CALI = "bambu_lan_flow_cali";
 static const char *CONFIG_KEY_BAMBU_VIBRATION_CALI = "bambu_lan_vibration_cali";
 static const char *CONFIG_KEY_BAMBU_LAYER_INSPECT = "bambu_lan_layer_inspect";
 static const char *CONFIG_KEY_BAMBU_TIMELAPSE = "bambu_lan_timelapse";
+static const char *CONFIG_KEY_BAMBU_CLOUD_REGION = "bambu_cloud_region";
+static const char *CONFIG_KEY_BAMBU_CLOUD_HOST = "bambu_cloud_host";
+static const char *CONFIG_KEY_BAMBU_CLOUD_EMAIL = "bambu_cloud_email";
+static const char *CONFIG_KEY_BAMBU_CLOUD_USER_ID = "bambu_cloud_user_id";
+static const char *CONFIG_KEY_BAMBU_CLOUD_NICKNAME = "bambu_cloud_nickname";
+static const char *CONFIG_KEY_BAMBU_CLOUD_ACCESS_TOKEN = "bambu_cloud_access_token";
+static const char *CONFIG_KEY_BAMBU_CLOUD_REFRESH_TOKEN = "bambu_cloud_refresh_token";
 
 PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUploadActions post_actions, const wxArrayString &groups, const wxArrayString& storage_paths, const wxArrayString& storage_names, bool bambu_lan)
     : MsgDialog(static_cast<wxWindow*>(wxGetApp().mainframe), _L("Send G-Code to printer host"), _L("Upload to Printer Host with the following filename:"), 0) // Set style = 0 to avoid default creation of the "OK" button. 
@@ -331,6 +340,121 @@ wxDEFINE_EVENT(EVT_PRINTHOST_ERROR,    PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_CANCEL,   PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_INFO,  PrintHostQueueDialog::Event);
 
+class BambuCloudLoginDialog : public DPIDialog
+{
+public:
+    BambuCloudLoginDialog(wxWindow *parent)
+        : DPIDialog(parent, wxID_ANY, _L("Bambu Cloud Login"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+    {
+        AppConfig *app_config = wxGetApp().app_config;
+
+        wxArrayString regions;
+        regions.Add(_L("Global"));
+        regions.Add(_L("China"));
+        m_region = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, regions);
+        const std::string saved_region = app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REGION);
+        m_region->SetSelection(saved_region == "CN" ? 1 : 0);
+
+        m_host = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_HOST)));
+        if (m_host->GetValue().empty())
+            m_host->SetValue(m_region->GetSelection() == 1 ? "https://api.bambulab.cn/" : "https://api.bambulab.com/");
+        m_email = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_EMAIL)));
+        m_user_id = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_USER_ID)));
+        m_nickname = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_NICKNAME)));
+        m_access_token = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_ACCESS_TOKEN)), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
+        m_refresh_token = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REFRESH_TOKEN)), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
+
+        auto *topsizer = new wxBoxSizer(wxVERTICAL);
+        auto *grid = new wxFlexGridSizer(0, 2, 6, 8);
+        grid->AddGrowableCol(1, 1);
+        add_row(grid, _L("Region"), m_region);
+        add_row(grid, _L("API host"), m_host);
+        add_row(grid, _L("Email"), m_email);
+        add_row(grid, _L("User ID"), m_user_id);
+        add_row(grid, _L("Nickname"), m_nickname);
+        add_row(grid, _L("Access token"), m_access_token);
+        add_row(grid, _L("Refresh token"), m_refresh_token);
+        topsizer->Add(grid, 0, wxEXPAND | wxALL, 12);
+
+        auto *note = new wxStaticText(this, wxID_ANY, _L("This stores Bambu cloud login material for the custom Bambu integration. The full Orca/Bambu web login flow also requires the Bambu network plugin runtime."));
+        note->Wrap(FromDIP(560));
+        topsizer->Add(note, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+
+        auto *button_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_open_login = new wxButton(this, wxID_ANY, _L("Open Login Page"));
+        auto *btn_clear = new wxButton(this, wxID_ANY, _L("Clear"));
+        auto *btn_save = new wxButton(this, wxID_OK, _L("Save"));
+        button_sizer->Add(btn_open_login, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_clear, 0, wxRIGHT, 6);
+        button_sizer->AddStretchSpacer();
+        button_sizer->Add(new wxButton(this, wxID_CANCEL, _L("Cancel")), 0, wxRIGHT, 6);
+        button_sizer->Add(btn_save, 0);
+        topsizer->Add(button_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+
+        SetSizer(topsizer);
+        Layout();
+        Fit();
+        CentreOnParent();
+
+        m_region->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
+            m_host->SetValue(m_region->GetSelection() == 1 ? "https://api.bambulab.cn/" : "https://api.bambulab.com/");
+        });
+        btn_open_login->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            const bool china = m_region->GetSelection() == 1;
+            wxLaunchDefaultBrowser(china ? "https://bambulab.cn/sign-in" : "https://bambulab.com/sign-in", wxBROWSER_NEW_WINDOW);
+        });
+        btn_clear->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            m_email->Clear();
+            m_user_id->Clear();
+            m_nickname->Clear();
+            m_access_token->Clear();
+            m_refresh_token->Clear();
+        });
+    }
+
+    void EndModal(int ret) override
+    {
+        if (ret == wxID_OK) {
+            AppConfig *app_config = wxGetApp().app_config;
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REGION, m_region->GetSelection() == 1 ? "CN" : "US");
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_HOST, into_u8(m_host->GetValue()));
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_EMAIL, into_u8(m_email->GetValue()));
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_USER_ID, into_u8(m_user_id->GetValue()));
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_NICKNAME, into_u8(m_nickname->GetValue()));
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_ACCESS_TOKEN, into_u8(m_access_token->GetValue()));
+            app_config->set("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REFRESH_TOKEN, into_u8(m_refresh_token->GetValue()));
+        }
+        DPIDialog::EndModal(ret);
+    }
+
+private:
+    void on_dpi_changed(const wxRect &suggested_rect) override
+    {
+        SetSize(suggested_rect.GetSize());
+        Layout();
+    }
+
+    void add_row(wxFlexGridSizer *grid, const wxString &label, wxWindow *control)
+    {
+        grid->Add(new wxStaticText(this, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
+        grid->Add(control, 1, wxEXPAND);
+    }
+
+    wxChoice *m_region { nullptr };
+    wxTextCtrl *m_host { nullptr };
+    wxTextCtrl *m_email { nullptr };
+    wxTextCtrl *m_user_id { nullptr };
+    wxTextCtrl *m_nickname { nullptr };
+    wxTextCtrl *m_access_token { nullptr };
+    wxTextCtrl *m_refresh_token { nullptr };
+};
+
+void show_bambu_cloud_login_dialog(wxWindow *parent)
+{
+    BambuCloudLoginDialog dlg(parent);
+    dlg.ShowModal();
+}
+
 class BambuLanControlDialog : public DPIDialog
 {
 public:
@@ -355,6 +479,7 @@ public:
 
         m_status = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
         m_summary = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 90), wxTE_MULTILINE | wxTE_READONLY);
+        m_hms = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 95), wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
         m_files = new wxListBox(this, wxID_ANY);
 
         auto *temp_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -468,6 +593,8 @@ public:
         topsizer->Add(gcode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Summary")), 0, wxLEFT | wxRIGHT, 10);
         topsizer->Add(m_summary, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(new wxStaticText(this, wxID_ANY, _L("HMS")), 0, wxLEFT | wxRIGHT, 10);
+        topsizer->Add(m_hms, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Status JSON")), 0, wxLEFT | wxRIGHT, 10);
         topsizer->Add(m_status, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("SD card files")), 0, wxLEFT | wxRIGHT, 10);
@@ -554,9 +681,100 @@ private:
         return {};
     }
 
+    static bool json_u32(const nlohmann::json &object, const char *key, uint32_t &out)
+    {
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null())
+            return false;
+        if (it->is_number_unsigned()) {
+            out = static_cast<uint32_t>(it->get<uint64_t>());
+            return true;
+        }
+        if (it->is_number_integer()) {
+            const auto value = it->get<int64_t>();
+            if (value < 0)
+                return false;
+            out = static_cast<uint32_t>(value);
+            return true;
+        }
+        if (it->is_string()) {
+            try {
+                size_t parsed_chars = 0;
+                const unsigned long value = std::stoul(it->get<std::string>(), &parsed_chars, 0);
+                if (parsed_chars == it->get<std::string>().size()) {
+                    out = static_cast<uint32_t>(value);
+                    return true;
+                }
+            } catch (...) {
+            }
+        }
+        return false;
+    }
+
+    static const char *hms_level_name(uint32_t code)
+    {
+        switch ((code >> 16) & 0x0f) {
+        case 1: return "Fatal";
+        case 2: return "Serious";
+        case 3: return "Common";
+        case 4: return "Info";
+        default: return "Unknown";
+        }
+    }
+
+    static std::string hms_module_name(uint32_t attr)
+    {
+        const uint32_t module = (attr >> 24) & 0xff;
+        switch (module) {
+        case 0x03: return "Motion Controller";
+        case 0x05: return "Mainboard";
+        case 0x07: return "AMS";
+        case 0x08: return "Toolhead";
+        case 0x0c: return "XCam";
+        case 0x0d: return "AP";
+        case 0x12: return "Laser";
+        default: {
+            std::ostringstream oss;
+            oss << "Module 0x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << module;
+            return oss.str();
+        }
+        }
+    }
+
+    static std::string hms_long_code(uint32_t attr, uint32_t code)
+    {
+        const uint32_t module = (attr >> 24) & 0xff;
+        const uint32_t module_num = (attr >> 16) & 0xff;
+        const uint32_t part_id = (attr >> 8) & 0xff;
+        const uint32_t level = (code >> 16) & 0x0f;
+        const uint32_t msg_code = code & 0xffff;
+        std::ostringstream oss;
+        oss << std::uppercase << std::hex << std::setfill('0')
+            << std::setw(2) << module
+            << std::setw(2) << module_num
+            << std::setw(2) << part_id
+            << "00000"
+            << std::setw(1) << level
+            << std::setw(4) << msg_code;
+        return oss.str();
+    }
+
+    static std::string hms_line(uint32_t attr, uint32_t code)
+    {
+        const uint32_t module_num = (attr >> 16) & 0xff;
+        const uint32_t part_id = (attr >> 8) & 0xff;
+        const uint32_t msg_code = code & 0xffff;
+        std::ostringstream oss;
+        oss << hms_level_name(code) << " " << hms_module_name(attr) << " " << hms_long_code(attr, code)
+            << " (unit " << module_num << ", part " << part_id << ", message 0x"
+            << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << msg_code << ")";
+        return oss.str();
+    }
+
     void update_status_summary(const std::string &status)
     {
         std::string summary;
+        std::string hms_text = "No active HMS items.";
         const nlohmann::json parsed = nlohmann::json::parse(status, nullptr, false);
         if (!parsed.is_discarded()) {
             const nlohmann::json *print = nullptr;
@@ -585,8 +803,23 @@ private:
                     if (!value.empty())
                         summary += GUI::format("%1%: %2%\n", label, value);
                 }
-                if (const auto hms = print->find("hms"); hms != print->end() && hms->is_array() && !hms->empty())
+                if (const auto hms = print->find("hms"); hms != print->end() && hms->is_array() && !hms->empty()) {
                     summary += GUI::format("HMS items: %1%\n", hms->size());
+                    hms_text.clear();
+                    size_t parsed_count = 0;
+                    for (const nlohmann::json &item : *hms) {
+                        if (!item.is_object())
+                            continue;
+                        uint32_t attr = 0;
+                        uint32_t code = 0;
+                        if (json_u32(item, "attr", attr) && json_u32(item, "code", code)) {
+                            ++parsed_count;
+                            hms_text += hms_line(attr, code) + "\n";
+                        }
+                    }
+                    if (parsed_count == 0)
+                        hms_text = "HMS items were present, but none used the expected attr/code format.";
+                }
                 if (const auto ams = print->find("ams"); ams != print->end() && ams->is_object())
                     summary += "AMS: present\n";
                 if (const auto ipcam = print->find("ipcam"); ipcam != print->end() && ipcam->is_object()) {
@@ -602,6 +835,7 @@ private:
         if (summary.empty())
             summary = "Status received. No known summary fields found.";
         m_summary->SetValue(wxString::FromUTF8(summary.c_str()));
+        m_hms->SetValue(wxString::FromUTF8(hms_text.c_str()));
     }
 
     void refresh_files()
@@ -755,6 +989,7 @@ private:
 
     std::unique_ptr<BambuLan> m_host;
     wxTextCtrl *m_summary { nullptr };
+    wxTextCtrl *m_hms { nullptr };
     wxTextCtrl *m_status { nullptr };
     wxListBox *m_files { nullptr };
     wxSpinCtrl *m_nozzle_temp { nullptr };
