@@ -1073,16 +1073,24 @@ private:
         if (dev_id.empty())
             return;
         wxBusyCursor wait;
-        std::string url;
         std::string error;
-        if (!BambuCloud::instance().get_camera_url(dev_id, url, error)) {
+        const std::weak_ptr<bool> alive = m_alive;
+        if (!BambuCloud::instance().get_camera_url_async(dev_id, [this, alive, dev_id](std::string url) {
+                wxGetApp().CallAfter([this, alive, dev_id, url = std::move(url)] {
+                    const auto locked = alive.lock();
+                    if (!locked || !*locked)
+                        return;
+                    m_raw->SetValue(wxString::FromUTF8(("Camera URL for " + dev_id + "\n\n" + url).c_str()));
+                    m_tabs->SetSelection(3);
+                    if (!url.empty() && wxMessageBox(_L("Open the camera URL in a browser?"), _L("Bambu Cloud Devices"), wxYES_NO | wxICON_QUESTION, this) == wxYES)
+                        wxLaunchDefaultBrowser(wxString::FromUTF8(url.c_str()), wxBROWSER_NEW_WINDOW);
+                });
+            }, error)) {
             show_error(this, wxString::FromUTF8(error.c_str()));
             return;
         }
-        m_raw->SetValue(wxString::FromUTF8(("Camera URL for " + dev_id + "\n\n" + url).c_str()));
+        m_raw->SetValue(wxString::FromUTF8(("Requested camera URL for " + dev_id).c_str()));
         m_tabs->SetSelection(3);
-        if (!url.empty() && wxMessageBox(_L("Open the camera URL in a browser?"), _L("Bambu Cloud Devices"), wxYES_NO | wxICON_QUESTION, this) == wxYES)
-            wxLaunchDefaultBrowser(wxString::FromUTF8(url.c_str()), wxBROWSER_NEW_WINDOW);
     }
 
     void query_firmware()
@@ -1138,6 +1146,9 @@ private:
         const std::string dev_id = selected_device_id();
         if (dev_id.empty())
             return;
+        const int selected = selected_index();
+        if (selected < 0 || size_t(selected) >= m_device_json.size())
+            return;
         wxFileDialog dlg(this, _L("Select .3mf file for Bambu cloud print"), wxEmptyString, wxEmptyString,
                          _L("3MF files (*.3mf)|*.3mf|All files|*.*"), wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dlg.ShowModal() != wxID_OK)
@@ -1146,8 +1157,8 @@ private:
         const std::string filename = into_u8(dlg.GetPath());
         BambuCloudPrintParams params;
         params.dev_id = dev_id;
-        params.dev_name = first_json_string(m_device_json[size_t(selected_index())], { "dev_name", "devName", "name", "printer_name" });
-        params.dev_ip = first_json_string(m_device_json[size_t(selected_index())], { "dev_ip", "ip", "lan_ip" });
+        params.dev_name = first_json_string(m_device_json[size_t(selected)], { "dev_name", "devName", "name", "printer_name" });
+        params.dev_ip = first_json_string(m_device_json[size_t(selected)], { "dev_ip", "ip", "lan_ip" });
         params.filename = filename;
         params.project_name = boost::filesystem::path(filename).stem().string();
         params.task_name = params.project_name;
@@ -1164,8 +1175,12 @@ private:
         params.task_bed_type = "textured_plate";
 
         std::string error;
-        if (!BambuCloud::instance().start_print(params, [this](int status, int code, std::string msg) {
-                wxGetApp().CallAfter([this, status, code, msg = std::move(msg)] {
+        const std::weak_ptr<bool> alive = m_alive;
+        if (!BambuCloud::instance().start_print(params, [this, alive](int status, int code, std::string msg) {
+                wxGetApp().CallAfter([this, alive, status, code, msg = std::move(msg)] {
+                    const auto locked = alive.lock();
+                    if (!locked || !*locked)
+                        return;
                     m_raw->AppendText(wxString::FromUTF8(GUI::format("Print update status=%1% code=%2% message=%3%\n", status, code, msg).c_str()));
                 });
             }, error)) {

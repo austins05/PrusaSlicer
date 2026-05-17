@@ -88,6 +88,7 @@ public:
     bool query_bind_status(const std::vector<std::string> &device_ids, std::string &body, unsigned int &http_code, std::string &error);
     bool get_printer_firmware(const std::string &device_id, std::string &body, unsigned int &http_code, std::string &error);
     bool get_camera_url(const std::string &device_id, std::string &url, std::string &error);
+    bool get_camera_url_async(const std::string &device_id, std::function<void(std::string)> callback, std::string &error);
     bool send_cloud_message(const std::string &device_id, const std::string &json, int qos, int flag, std::string &error);
     bool start_subscribe(const std::string &module, std::string &error);
     bool add_subscribe(const std::vector<std::string> &device_ids, std::string &error);

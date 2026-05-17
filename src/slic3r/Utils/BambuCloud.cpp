@@ -373,12 +373,17 @@ bool BambuCloud::get_printer_firmware(const std::string &device_id, std::string 
 bool BambuCloud::get_camera_url(const std::string &device_id, std::string &url, std::string &error)
 {
     url.clear();
+    return get_camera_url_async(device_id, [&url](std::string value) { url = std::move(value); }, error);
+}
+
+bool BambuCloud::get_camera_url_async(const std::string &device_id, std::function<void(std::string)> callback, std::string &error)
+{
     error.clear();
     if (m_agent == nullptr || m_get_camera_url == nullptr) {
         error = "Bambu cloud camera URL API is not initialized.";
         return false;
     }
-    const int result = m_get_camera_url(m_agent, device_id, [&url](std::string value) { url = std::move(value); });
+    const int result = m_get_camera_url(m_agent, device_id, std::move(callback));
     if (result != 0) {
         error = "Bambu cloud camera URL API failed with result " + std::to_string(result) + ".";
         return false;
