@@ -5,6 +5,7 @@
 #include "PrintHostDialogs.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 
@@ -17,6 +18,7 @@
 #include <wx/choice.h>
 #include <wx/button.h>
 #include <wx/listbox.h>
+#include <wx/spinctrl.h>
 #include <wx/dataview.h>
 #include <wx/wupdlock.h>
 #include <wx/debug.h>
@@ -353,6 +355,43 @@ public:
         m_status = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
         m_files = new wxListBox(this, wxID_ANY);
 
+        auto *temp_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_nozzle_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1), wxSP_ARROW_KEYS, 0, 360, 220);
+        m_bed_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1), wxSP_ARROW_KEYS, 0, 120, 60);
+        m_chamber_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1), wxSP_ARROW_KEYS, 0, 65, 0);
+        auto *btn_nozzle_temp = new wxButton(this, wxID_ANY, _L("Set Nozzle"));
+        auto *btn_bed_temp = new wxButton(this, wxID_ANY, _L("Set Bed"));
+        auto *btn_chamber_temp = new wxButton(this, wxID_ANY, _L("Set Chamber"));
+        temp_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Nozzle")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        temp_sizer->Add(m_nozzle_temp, 0, wxRIGHT, 4);
+        temp_sizer->Add(btn_nozzle_temp, 0, wxRIGHT, 10);
+        temp_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Bed")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        temp_sizer->Add(m_bed_temp, 0, wxRIGHT, 4);
+        temp_sizer->Add(btn_bed_temp, 0, wxRIGHT, 10);
+        temp_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Chamber")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        temp_sizer->Add(m_chamber_temp, 0, wxRIGHT, 4);
+        temp_sizer->Add(btn_chamber_temp, 0);
+
+        auto *speed_sizer = new wxBoxSizer(wxHORIZONTAL);
+        wxArrayString speed_choices;
+        speed_choices.Add(_L("Silent"));
+        speed_choices.Add(_L("Standard"));
+        speed_choices.Add(_L("Sport"));
+        speed_choices.Add(_L("Ludicrous"));
+        m_speed = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, speed_choices);
+        m_speed->SetSelection(1);
+        auto *btn_speed = new wxButton(this, wxID_ANY, _L("Set Speed"));
+        speed_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Print speed")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        speed_sizer->Add(m_speed, 0, wxRIGHT, 4);
+        speed_sizer->Add(btn_speed, 0);
+        speed_sizer->AddStretchSpacer();
+
+        auto *gcode_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_gcode = new wxTextCtrl(this, wxID_ANY);
+        auto *btn_gcode = new wxButton(this, wxID_ANY, _L("Send G-code"));
+        gcode_sizer->Add(m_gcode, 1, wxRIGHT, 4);
+        gcode_sizer->Add(btn_gcode, 0);
+
         auto *file_button_sizer = new wxBoxSizer(wxHORIZONTAL);
         auto *btn_print_file = new wxButton(this, wxID_ANY, _L("Print Selected File"));
         auto *btn_delete_file = new wxButton(this, wxID_ANY, _L("Delete Selected File"));
@@ -360,6 +399,9 @@ public:
         file_button_sizer->Add(btn_delete_file, 0);
 
         topsizer->Add(button_sizer, 0, wxEXPAND | wxALL, 10);
+        topsizer->Add(temp_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(speed_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(gcode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Status JSON")), 0, wxLEFT | wxRIGHT, 10);
         topsizer->Add(m_status, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("SD card files")), 0, wxLEFT | wxRIGHT, 10);
@@ -385,6 +427,11 @@ public:
         });
         btn_print_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { print_selected_file(); });
         btn_delete_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { delete_selected_file(); });
+        btn_nozzle_temp->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_nozzle_temp(); });
+        btn_bed_temp->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_bed_temp(); });
+        btn_chamber_temp->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_chamber_temp(); });
+        btn_speed->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_speed(); });
+        btn_gcode->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_gcode(); });
     }
 
 private:
@@ -442,6 +489,45 @@ private:
         refresh_status();
     }
 
+    void run_control_command(const std::function<bool(std::string&)> &fn)
+    {
+        wxBusyCursor wait;
+        std::string error;
+        if (!fn(error)) {
+            show_error_message(error);
+            return;
+        }
+        refresh_status();
+    }
+
+    void set_nozzle_temp()
+    {
+        run_control_command([this](std::string &error) { return m_host->set_nozzle_temp(m_nozzle_temp->GetValue(), error); });
+    }
+
+    void set_bed_temp()
+    {
+        run_control_command([this](std::string &error) { return m_host->set_bed_temp(m_bed_temp->GetValue(), error); });
+    }
+
+    void set_chamber_temp()
+    {
+        run_control_command([this](std::string &error) { return m_host->set_chamber_temp(m_chamber_temp->GetValue(), error); });
+    }
+
+    void set_speed()
+    {
+        run_control_command([this](std::string &error) { return m_host->set_print_speed(m_speed->GetSelection() + 1, error); });
+    }
+
+    void send_gcode()
+    {
+        const std::string gcode = into_u8(m_gcode->GetValue());
+        if (gcode.empty())
+            return;
+        run_control_command([this, &gcode](std::string &error) { return m_host->send_gcode_line(gcode, error); });
+    }
+
     void print_selected_file()
     {
         const std::string file = selected_file();
@@ -479,6 +565,11 @@ private:
     std::unique_ptr<BambuLan> m_host;
     wxTextCtrl *m_status { nullptr };
     wxListBox *m_files { nullptr };
+    wxSpinCtrl *m_nozzle_temp { nullptr };
+    wxSpinCtrl *m_bed_temp { nullptr };
+    wxSpinCtrl *m_chamber_temp { nullptr };
+    wxChoice *m_speed { nullptr };
+    wxTextCtrl *m_gcode { nullptr };
 };
 
 void show_bambu_lan_control_dialog(wxWindow *parent)

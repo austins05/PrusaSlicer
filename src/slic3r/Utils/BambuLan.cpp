@@ -407,6 +407,51 @@ std::string mqtt_pushing_command_payload(const std::string &command)
     return payload.str();
 }
 
+std::string mqtt_gcode_payload(const std::string &gcode)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"gcode_line\","
+            << "\"param\":\"" << json_escape(gcode) << "\""
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_int_print_payload(const std::string &command, const std::string &field, int value)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"" << json_escape(command) << "\","
+            << "\"" << json_escape(field) << "\":" << value
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_nozzle_temp_payload(int temp)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"set_nozzle_temp\","
+            << "\"extruder_index\":0,"
+            << "\"target_temp\":" << temp
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_print_speed_payload(int speed_level)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"print_speed\","
+            << "\"param\":\"" << speed_level << "\""
+            << "}}";
+    return payload.str();
+}
+
 }
 
 BambuLan::BambuLan(DynamicPrintConfig *config)
@@ -710,6 +755,32 @@ bool BambuLan::send_print_command(const std::string &command, std::string &error
 bool BambuLan::send_pushing_command(const std::string &command, std::string &error) const
 {
     return mqtt_publish_json(mqtt_pushing_command_payload(command), error);
+}
+
+bool BambuLan::send_gcode_line(const std::string &gcode, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_gcode_payload(gcode), error);
+}
+
+bool BambuLan::set_bed_temp(int temp, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_int_print_payload("set_bed_temp", "temp", temp), error);
+}
+
+bool BambuLan::set_nozzle_temp(int temp, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_nozzle_temp_payload(temp), error);
+}
+
+bool BambuLan::set_chamber_temp(int temp, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_int_print_payload("set_ctt", "ctt_val", temp), error);
+}
+
+bool BambuLan::set_print_speed(int speed_level, std::string &error) const
+{
+    speed_level = std::clamp(speed_level, 1, 4);
+    return mqtt_publish_json(mqtt_print_speed_payload(speed_level), error);
 }
 
 bool BambuLan::request_status(std::string &status_json, std::string &error) const

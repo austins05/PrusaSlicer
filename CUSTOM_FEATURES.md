@@ -122,7 +122,7 @@ When sending to a Bambu Lab LAN host, the upload dialog exposes Bambu print-star
 - Build plate type
 - Bed leveling, flow calibration, vibration calibration, first layer inspection, and timelapse toggles
 
-The Window menu also includes `Bambu Lab LAN Control` for the selected physical printer. It can request the printer status report over MQTT, pause/resume/stop an active print, list SD-card files over FTPS, start a selected SD-card file, and delete selected SD-card files.
+The Window menu also includes `Bambu Lab LAN Control` for the selected physical printer. It can request the printer status report over MQTT, pause/resume/stop an active print, set nozzle/bed/chamber temperatures, set the printer speed mode, send a single raw G-code line, list SD-card files over FTPS, start a selected SD-card file, and delete selected SD-card files.
 
 Current limitations:
 

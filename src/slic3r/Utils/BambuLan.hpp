@@ -36,6 +36,11 @@ public:
     bool request_status(std::string &status_json, std::string &error) const;
     bool send_print_command(const std::string &command, std::string &error) const;
     bool send_pushing_command(const std::string &command, std::string &error) const;
+    bool send_gcode_line(const std::string &gcode, std::string &error) const;
+    bool set_bed_temp(int temp, std::string &error) const;
+    bool set_nozzle_temp(int temp, std::string &error) const;
+    bool set_chamber_temp(int temp, std::string &error) const;
+    bool set_print_speed(int speed_level, std::string &error) const;
     bool list_sdcard(std::vector<std::string> &files, std::string &error) const;
     bool delete_sdcard_file(const std::string &filename, std::string &error) const;
     bool start_sdcard_file(const std::string &filename, const std::string &print_options, std::string &error) const;
