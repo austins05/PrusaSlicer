@@ -25,6 +25,7 @@
 #include <wx/debug.h>
 #include <wx/msgdlg.h>
 #include <wx/utils.h>
+#include <wx/webview.h>
 
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem.hpp>
@@ -42,6 +43,8 @@
 #include "NotificationManager.hpp"
 #include "ExtraRenderers.hpp"
 #include "format.hpp"
+#include "WebViewDialog.hpp"
+#include "../Utils/BambuCloud.hpp"
 #include "../Utils/BambuLan.hpp"
 
 namespace fs = boost::filesystem;
@@ -340,6 +343,58 @@ wxDEFINE_EVENT(EVT_PRINTHOST_ERROR,    PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_CANCEL,   PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_INFO,  PrintHostQueueDialog::Event);
 
+class BambuCloudLoginWebDialog : public WebViewDialog
+{
+public:
+    BambuCloudLoginWebDialog(wxWindow *parent)
+        : WebViewDialog(parent,
+                        wxString::FromUTF8(BambuCloud::instance().cloud_login_url("en").c_str()),
+                        _L("Bambu Cloud Login"),
+                        wxSize(720, 840),
+                        { "wx" })
+    {
+    }
+
+    void on_script_message(wxWebViewEvent &evt) override
+    {
+        const std::string input = into_u8(evt.GetString());
+        const nlohmann::json msg = nlohmann::json::parse(input, nullptr, false);
+        if (msg.is_discarded() || !msg.is_object())
+            return;
+
+        const std::string command = msg.value("command", std::string());
+        if (command == "get_login_cmd") {
+            const std::string login_cmd = BambuCloud::instance().build_login_cmd();
+            if (!login_cmd.empty())
+                run_script(wxString::FromUTF8(("window.postMessage(" + login_cmd + ", '*')").c_str()));
+            return;
+        }
+
+        if (command == "user_login" || command == "user_ticket_login") {
+            std::string error;
+            if (!BambuCloud::instance().change_user(msg.dump(), error)) {
+                show_error(this, wxString::FromUTF8(error.c_str()));
+                return;
+            }
+            EndModal(wxID_OK);
+            return;
+        }
+
+        if (command == "new_webpage" || command == "thirdparty_login") {
+            if (msg.contains("data") && msg["data"].is_object() && msg["data"].contains("url") && msg["data"]["url"].is_string())
+                wxLaunchDefaultBrowser(wxString::FromUTF8(msg["data"]["url"].get<std::string>().c_str()), wxBROWSER_NEW_WINDOW);
+            return;
+        }
+    }
+
+protected:
+    void on_dpi_changed(const wxRect &suggested_rect) override
+    {
+        SetSize(suggested_rect.GetSize());
+        Layout();
+    }
+};
+
 class BambuCloudLoginDialog : public DPIDialog
 {
 public:
@@ -363,6 +418,7 @@ public:
         m_nickname = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_NICKNAME)));
         m_access_token = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_ACCESS_TOKEN)), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
         m_refresh_token = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REFRESH_TOKEN)), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
+        m_status = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 120), wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
 
         auto *topsizer = new wxBoxSizer(wxVERTICAL);
         auto *grid = new wxFlexGridSizer(0, 2, 6, 8);
@@ -376,14 +432,24 @@ public:
         add_row(grid, _L("Refresh token"), m_refresh_token);
         topsizer->Add(grid, 0, wxEXPAND | wxALL, 12);
 
-        auto *note = new wxStaticText(this, wxID_ANY, _L("This stores Bambu cloud login material for the custom Bambu integration. The full Orca/Bambu web login flow also requires the Bambu network plugin runtime."));
+        auto *note = new wxStaticText(this, wxID_ANY, _L("This stores Bambu cloud login material and can load the Bambu network runtime from the local plugins folder. Use Import Runtime if the plugin is installed in OrcaSlicer or Bambu Studio."));
         note->Wrap(FromDIP(560));
         topsizer->Add(note, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Runtime status")), 0, wxLEFT | wxRIGHT, 12);
+        topsizer->Add(m_status, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
 
         auto *button_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_import = new wxButton(this, wxID_ANY, _L("Import Runtime"));
+        auto *btn_initialize = new wxButton(this, wxID_ANY, _L("Initialize"));
+        auto *btn_web_login = new wxButton(this, wxID_ANY, _L("Web Login"));
+        auto *btn_logout = new wxButton(this, wxID_ANY, _L("Logout"));
         auto *btn_open_login = new wxButton(this, wxID_ANY, _L("Open Login Page"));
         auto *btn_clear = new wxButton(this, wxID_ANY, _L("Clear"));
         auto *btn_save = new wxButton(this, wxID_OK, _L("Save"));
+        button_sizer->Add(btn_import, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_initialize, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_web_login, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_logout, 0, wxRIGHT, 6);
         button_sizer->Add(btn_open_login, 0, wxRIGHT, 6);
         button_sizer->Add(btn_clear, 0, wxRIGHT, 6);
         button_sizer->AddStretchSpacer();
@@ -399,6 +465,34 @@ public:
         m_region->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
             m_host->SetValue(m_region->GetSelection() == 1 ? "https://api.bambulab.cn/" : "https://api.bambulab.com/");
         });
+        btn_import->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            std::string error;
+            if (!BambuCloud::instance().import_orca_plugin(error)) {
+                show_error(this, wxString::FromUTF8(error.c_str()));
+                return;
+            }
+            refresh_runtime_status();
+        });
+        btn_initialize->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            initialize_runtime(true);
+        });
+        btn_web_login->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (!initialize_runtime(true))
+                return;
+            BambuCloudLoginWebDialog dlg(this);
+            if (dlg.ShowModal() == wxID_OK)
+                update_from_cloud_status();
+            refresh_runtime_status();
+        });
+        btn_logout->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            std::string error;
+            if (!BambuCloud::instance().logout(true, error)) {
+                show_error(this, wxString::FromUTF8(error.c_str()));
+                return;
+            }
+            update_from_cloud_status();
+            refresh_runtime_status();
+        });
         btn_open_login->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
             const bool china = m_region->GetSelection() == 1;
             wxLaunchDefaultBrowser(china ? "https://bambulab.cn/sign-in" : "https://bambulab.com/sign-in", wxBROWSER_NEW_WINDOW);
@@ -410,6 +504,7 @@ public:
             m_access_token->Clear();
             m_refresh_token->Clear();
         });
+        refresh_runtime_status();
     }
 
     void EndModal(int ret) override
@@ -428,6 +523,61 @@ public:
     }
 
 private:
+    std::string country_code() const
+    {
+        return m_region->GetSelection() == 1 ? "CN" : "US";
+    }
+
+    bool initialize_runtime(bool show_errors)
+    {
+        std::string error;
+        if (!BambuCloud::instance().initialize(country_code(), error)) {
+            if (show_errors)
+                show_error(this, wxString::FromUTF8(error.c_str()));
+            refresh_runtime_status();
+            return false;
+        }
+        update_from_cloud_status();
+        refresh_runtime_status();
+        return true;
+    }
+
+    void update_from_cloud_status()
+    {
+        const BambuCloudStatus status = BambuCloud::instance().status();
+        if (!status.host.empty())
+            m_host->SetValue(wxString::FromUTF8(status.host.c_str()));
+        if (!status.user_id.empty())
+            m_user_id->SetValue(wxString::FromUTF8(status.user_id.c_str()));
+        if (!status.user_name.empty())
+            m_email->SetValue(wxString::FromUTF8(status.user_name.c_str()));
+        if (!status.user_nickname.empty())
+            m_nickname->SetValue(wxString::FromUTF8(status.user_nickname.c_str()));
+    }
+
+    void refresh_runtime_status()
+    {
+        const BambuCloudStatus status = BambuCloud::instance().status();
+        std::string text;
+        text += GUI::format("Plugin dir: %1%\n", status.plugin_dir);
+        text += GUI::format("Loaded: %1%\n", status.loaded ? "yes" : "no");
+        if (!status.library_path.empty())
+            text += GUI::format("Library: %1%\n", status.library_path);
+        if (!status.version.empty())
+            text += GUI::format("Version: %1%\n", status.version);
+        text += GUI::format("Agent: %1%\n", status.agent_created ? "yes" : "no");
+        text += GUI::format("Logged in: %1%\n", status.logged_in ? "yes" : "no");
+        if (!status.host.empty())
+            text += GUI::format("Host: %1%\n", status.host);
+        if (!status.user_id.empty())
+            text += GUI::format("User ID: %1%\n", status.user_id);
+        if (!status.user_nickname.empty())
+            text += GUI::format("Nickname: %1%\n", status.user_nickname);
+        if (!status.error.empty())
+            text += GUI::format("Error: %1%\n", status.error);
+        m_status->SetValue(wxString::FromUTF8(text.c_str()));
+    }
+
     void on_dpi_changed(const wxRect &suggested_rect) override
     {
         SetSize(suggested_rect.GetSize());
@@ -447,6 +597,7 @@ private:
     wxTextCtrl *m_nickname { nullptr };
     wxTextCtrl *m_access_token { nullptr };
     wxTextCtrl *m_refresh_token { nullptr };
+    wxTextCtrl *m_status { nullptr };
 };
 
 void show_bambu_cloud_login_dialog(wxWindow *parent)

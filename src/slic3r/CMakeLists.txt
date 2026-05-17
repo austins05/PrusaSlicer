@@ -394,6 +394,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/PrusaConnect.cpp
     Utils/BambuLan.hpp
     Utils/BambuLan.cpp
+    Utils/BambuCloud.hpp
+    Utils/BambuCloud.cpp
     Utils/ServiceConfig.hpp
     Utils/ServiceConfig.cpp
 )

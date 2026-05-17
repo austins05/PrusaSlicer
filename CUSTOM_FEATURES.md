@@ -126,11 +126,12 @@ The Bambu Lab LAN host supports network lookup through the physical-printer Brow
 
 The Window menu also includes `Bambu Lab LAN Control` for the selected physical printer. It can request the printer status report over MQTT, show a parsed status summary, decode HMS entries into Bambu-style long error codes with module and severity, pause/resume/stop an active print, set nozzle/bed/chamber temperatures, set the printer speed mode, send a single raw G-code line, set camera recording/timelapse/resolution flags, set common print-option and XCam detection flags, run basic AMS load/unload/RFID/calibration commands, list SD-card files over FTPS, start a selected SD-card file, and delete selected SD-card files.
 
-The Window menu also includes `Bambu Cloud Login`. This stores Bambu cloud region, API host, account identifiers, and token material in the PrusaSlicer application config so later cloud/device-sync work has a stable place to read credentials. The dialog can open the public Bambu sign-in page for the selected region.
+The Window menu also includes `Bambu Cloud Login`. This stores Bambu cloud region, API host, account identifiers, and token material in the PrusaSlicer application config. It can also import the installed Bambu networking runtime from OrcaSlicer or Bambu Studio, initialize `libbambu_networking`, open the Bambu web login in an embedded WebView, pass the plugin-generated login command back to the page, and submit the resulting login payload to the Bambu runtime.
 
 Current limitations:
 
-- The cloud login dialog is a credential/settings scaffold. The full Orca/Bambu Studio web login and device-account sync flow requires the proprietary Bambu networking plugin runtime and has not been fully ported into this PrusaSlicer fork yet.
+- The cloud login path requires the proprietary Bambu networking plugin runtime in the PrusaSlicer `plugins` config folder. The dialog can copy the runtime from a local OrcaSlicer/Bambu Studio install when available.
+- Full Orca/Bambu Studio device-account sync panels are not fully ported yet; this build has the runtime-backed account login layer and local LAN device controls.
 - AMS support is a local print-start mapping field, not the full Orca/Bambu Studio spool sync and AMS material matching UI.
 - Camera streaming, cloud account binding, remote device sync, and full AMS material matching panels are not implemented yet.
 
