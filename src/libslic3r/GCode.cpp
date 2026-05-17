@@ -68,6 +68,8 @@
 
 #include "SVG.hpp"
 
+#include <array>
+
 #include <tbb/parallel_for.h>
 
 // Intel redesigned some TBB interface considerably when merging TBB with their oneAPI set of libraries, see GH #7332.
@@ -937,6 +939,90 @@ static inline std::vector<const PrintInstance*> sort_object_instances_by_max_z(c
 }
 #endif
 
+static double point_to_rect_distance_sq(const Vec2d& point, const BoundingBoxf& rect)
+{
+    const double dx = (point.x() < rect.min.x()) ? rect.min.x() - point.x() :
+        ((point.x() > rect.max.x()) ? point.x() - rect.max.x() : 0.0);
+    const double dy = (point.y() < rect.min.y()) ? rect.min.y() - point.y() :
+        ((point.y() > rect.max.y()) ? point.y() - rect.max.y() : 0.0);
+    return dx * dx + dy * dy;
+}
+
+static Vec2d closest_point_on_segment_to_point(const Vec2d& a, const Vec2d& b, const Vec2d& point)
+{
+    const Vec2d ab = b - a;
+    const double len_sq = ab.squaredNorm();
+    if (len_sq <= std::numeric_limits<double>::epsilon())
+        return a;
+    const double t = std::clamp((point - a).dot(ab) / len_sq, 0.0, 1.0);
+    return a + t * ab;
+}
+
+static bool segment_intersection(const Vec2d& a, const Vec2d& b, const Vec2d& c, const Vec2d& d, Vec2d& out)
+{
+    const Vec2d r = b - a;
+    const Vec2d s = d - c;
+    const double denom = r.x() * s.y() - r.y() * s.x();
+    if (std::abs(denom) <= 1e-9)
+        return false;
+
+    const Vec2d ca = c - a;
+    const double t = (ca.x() * s.y() - ca.y() * s.x()) / denom;
+    const double u = (ca.x() * r.y() - ca.y() * r.x()) / denom;
+    if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0)
+        return false;
+
+    out = a + t * r;
+    return true;
+}
+
+static Vec2d closest_point_on_segment_to_bbox_xy(const Vec2d& a, const Vec2d& b, const BoundingBoxf& rect)
+{
+    if (point_to_rect_distance_sq(a, rect) == 0.0)
+        return a;
+    if (point_to_rect_distance_sq(b, rect) == 0.0)
+        return b;
+
+    const Vec2d min(rect.min.x(), rect.min.y());
+    const Vec2d max(rect.max.x(), rect.max.y());
+    const std::array<std::pair<Vec2d, Vec2d>, 4> edges{ {
+        { Vec2d(min.x(), min.y()), Vec2d(max.x(), min.y()) },
+        { Vec2d(max.x(), min.y()), Vec2d(max.x(), max.y()) },
+        { Vec2d(max.x(), max.y()), Vec2d(min.x(), max.y()) },
+        { Vec2d(min.x(), max.y()), Vec2d(min.x(), min.y()) }
+    } };
+
+    Vec2d intersection;
+    for (const auto& edge : edges)
+        if (segment_intersection(a, b, edge.first, edge.second, intersection))
+            return intersection;
+
+    Vec2d best = a;
+    double best_dist_sq = point_to_rect_distance_sq(a, rect);
+    const double end_dist_sq = point_to_rect_distance_sq(b, rect);
+    if (end_dist_sq < best_dist_sq) {
+        best = b;
+        best_dist_sq = end_dist_sq;
+    }
+
+    const std::array<Vec2d, 4> corners{ {
+        Vec2d(min.x(), min.y()),
+        Vec2d(max.x(), min.y()),
+        Vec2d(max.x(), max.y()),
+        Vec2d(min.x(), max.y())
+    } };
+    for (const Vec2d& corner : corners) {
+        Vec2d candidate = closest_point_on_segment_to_point(a, b, corner);
+        const double dist_sq = point_to_rect_distance_sq(candidate, rect);
+        if (dist_sq < best_dist_sq) {
+            best = candidate;
+            best_dist_sq = dist_sq;
+        }
+    }
+
+    return best;
+}
+
 // Produce a vector of PrintObjects in the order of their respective ModelObjects in print.model().
 std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Print& print)
 {
@@ -1409,6 +1495,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
 
     // Do all objects for each layer.
     if (print.config().complete_objects.value) {
+        m_completed_sequential_objects.clear();
         size_t finished_objects = 0;
         unsigned int current_extruder_id = initial_extruder_id;
         const Vec2f sequential_wipe_tower_anchor_shift =
@@ -1486,6 +1573,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             this->process_layers(print, tool_ordering, collect_layers_to_print(object),
                 *print_object_instance_sequential_active - object.instances().data(), 
                 smooth_path_cache_global, file);
+            this->register_completed_sequential_object(**print_object_instance_sequential_active);
             m_wipe_tower.reset();
             current_extruder_id = final_extruder_id;
             ++ finished_objects;
@@ -4168,6 +4256,72 @@ Polyline GCodeGenerator::generate_travel_xy_path(
     return xy_path;
 }
 
+void GCodeGenerator::register_completed_sequential_object(const PrintInstance& print_instance)
+{
+    if (!m_config.complete_objects.value)
+        return;
+
+    const PrintObject& object = *print_instance.print_object;
+    const BoundingBox object_box = object.bounding_box();
+    if (empty(object_box))
+        return;
+
+    SequentialClearanceObject completed;
+    completed.bbox.min = unscale(Point(object_box.min + print_instance.shift));
+    completed.bbox.max = unscale(Point(object_box.max + print_instance.shift));
+    completed.bbox.defined = true;
+    completed.top_z = unscale<double>(object.height());
+    completed.name = object.model_object() != nullptr ? object.model_object()->name : std::string();
+
+    for (const Layer* layer : object.layers())
+        completed.top_z = std::max(completed.top_z, layer->print_z);
+    for (const SupportLayer* layer : object.support_layers())
+        completed.top_z = std::max(completed.top_z, layer->print_z);
+
+    m_completed_sequential_objects.emplace_back(std::move(completed));
+}
+
+double GCodeGenerator::sequential_clearance_required_z(const Points3& travel) const
+{
+    if (!m_config.complete_objects.value || m_completed_sequential_objects.empty() ||
+        m_config.extruder_clearance_radius.value <= 0.0 || m_config.extruder_clearance_height.value <= 0.0 ||
+        travel.size() < 2)
+        return 0.0;
+
+    const double clearance_radius = m_config.extruder_clearance_radius.value + 5.0;
+    const double clearance_radius_sq = clearance_radius * clearance_radius;
+    const double clearance_height = m_config.extruder_clearance_height.value;
+    double required_z = 0.0;
+
+    for (size_t i = 1; i < travel.size(); ++i) {
+        const Vec2d a = point_to_gcode(travel[i - 1].head<2>());
+        const Vec2d b = point_to_gcode(travel[i].head<2>());
+        for (const SequentialClearanceObject& completed : m_completed_sequential_objects) {
+            if (!completed.bbox.defined)
+                continue;
+
+            const Vec2d closest = closest_point_on_segment_to_bbox_xy(a, b, completed.bbox);
+            if (point_to_rect_distance_sq(closest, completed.bbox) > clearance_radius_sq)
+                continue;
+
+            required_z = std::max(required_z, completed.top_z - clearance_height + 0.5);
+        }
+    }
+
+    if (required_z <= 0.0)
+        return 0.0;
+
+    if (m_config.max_print_height.value > 0.0) {
+        if (required_z > m_config.max_print_height.value)
+            BOOST_LOG_TRIVIAL(warning) << boost::format(
+                "Sequential clearance planner requires Z %.2f mm, above max_print_height %.2f mm")
+                % required_z % m_config.max_print_height.value;
+        required_z = std::min(required_z, m_config.max_print_height.value);
+    }
+
+    return required_z;
+}
+
 // This method accepts &point in print coordinates.
 std::string GCodeGenerator::travel_to(
     const Vec3crd &start_point,
@@ -4241,6 +4395,16 @@ std::string GCodeGenerator::travel_to(
         travel.pop_back();
     }
     travel.emplace_back(end_point);
+
+    const double required_clearance_z = sequential_clearance_required_z(travel);
+    if (required_clearance_z > initial_elevation + EPSILON) {
+        const coord_t clearance_z = scaled(required_clearance_z);
+        wipe_retract_gcode += "; sequential clearance lift to Z" + float_to_string_decimal_point(required_clearance_z) + "\n";
+        for (size_t i = 0; i + 1 < travel.size(); ++i)
+            travel[i].z() = std::max(travel[i].z(), clearance_z);
+        if (travel.size() >= 2 && travel[travel.size() - 2].head<2>() != end_point.head<2>())
+            travel.insert(travel.end() - 1, Vec3crd(end_point.x(), end_point.y(), clearance_z));
+    }
 
     if (this->config().travel_short_distance_acceleration > 0.) {
         return wipe_retract_gcode + generate_travel_gcode(travel, comment, insert_gcode, enforce_first_z, [&]() {

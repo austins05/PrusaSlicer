@@ -366,6 +366,15 @@ private:
     std::string     set_extruder(unsigned int extruder_id, double print_z);
     bool line_distancer_is_required(const std::vector<unsigned int>& extruder_ids);
 
+    struct SequentialClearanceObject {
+        BoundingBoxf bbox;
+        double       top_z { 0.0 };
+        std::string  name;
+    };
+
+    void            register_completed_sequential_object(const PrintInstance &print_instance);
+    double          sequential_clearance_required_z(const Points3 &travel) const;
+
     Seams::Placer                       m_seam_placer;
 
     /* Origin of print coordinates expressed in unscaled G-code coordinates.
@@ -467,6 +476,7 @@ private:
     std::string                         m_pending_pre_extrusion_gcode;
     // Pointer to currently exporting PrintObject and instance index.
     GCode::PrintObjectInstance          m_current_instance;
+    std::vector<SequentialClearanceObject> m_completed_sequential_objects;
 
     bool                                m_silent_time_estimator_enabled;
 
