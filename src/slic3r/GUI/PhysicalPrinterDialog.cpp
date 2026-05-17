@@ -402,6 +402,14 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
             if (dialog.show_and_lookup()) {
                 m_optgroup->set_value("print_host", dialog.get_selected(), true);
                 m_optgroup->get_field("print_host")->field_changed();
+                if (service == "bambu") {
+                    const wxString device_id = dialog.get_selected_txt("dev_id");
+                    if (!device_id.empty()) {
+                        m_optgroup->set_value("printhost_user", device_id, true);
+                        if (Field *user_field = m_optgroup->get_field("printhost_user"); user_field != nullptr)
+                            user_field->field_changed();
+                    }
+                }
             }
         });
 

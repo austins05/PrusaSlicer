@@ -40,6 +40,7 @@ public:
 
 	bool show_and_lookup();
 	wxString get_selected() const;
+	wxString get_selected_txt(const std::string &key) const;
 private:
 	wxListView *list;
 	std::unique_ptr<ReplySet> replies;

@@ -82,6 +82,9 @@ BonjourDialog::BonjourDialog(wxWindow *parent, Slic3r::PrinterTechnology tech, s
 	list->AppendColumn(_(L("Service name")), wxLIST_FORMAT_LEFT, 20 * em);
 	if (tech == ptFFF && this->service == "octoprint") {
 		list->AppendColumn(_(L("OctoPrint version")), wxLIST_FORMAT_LEFT, 5 * em);
+	} else if (this->service == "bambu") {
+		list->AppendColumn(_(L("Device ID")), wxLIST_FORMAT_LEFT, 12 * em);
+		list->AppendColumn(_(L("Model")), wxLIST_FORMAT_LEFT, 8 * em);
 	}
 
 	vsizer->Add(list, 1, wxEXPAND | wxALL, em);
@@ -164,6 +167,22 @@ wxString BonjourDialog::get_selected() const
 	return sel >= 0 ? list->GetItemText(sel) : wxString();
 }
 
+wxString BonjourDialog::get_selected_txt(const std::string &key) const
+{
+	auto sel = list->GetFirstSelected();
+	if (sel < 0)
+		return wxString();
+	const wxString selected = list->GetItemText(sel);
+	for (const auto &reply : *replies)
+		if (reply.full_address == selected) {
+			const auto it = reply.txt_data.find(key);
+			if (it != reply.txt_data.end())
+				return GUI::from_u8(it->second);
+			break;
+		}
+	return wxString();
+}
+
 
 // Private
 
@@ -202,6 +221,11 @@ void BonjourDialog::on_reply(BonjourReplyEvent &e)
 			if (it != reply.txt_data.end()) {
 				list->SetItem(item, 3, GUI::from_u8(it->second));
 			}
+		} else if (this->service == "bambu") {
+			if (const auto it = reply.txt_data.find("dev_id"); it != reply.txt_data.end())
+				list->SetItem(item, 3, GUI::from_u8(it->second));
+			if (const auto it = reply.txt_data.find("model"); it != reply.txt_data.end())
+				list->SetItem(item, 4, GUI::from_u8(it->second));
 		}
 	}
 
