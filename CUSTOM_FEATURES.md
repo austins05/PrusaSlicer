@@ -115,10 +115,17 @@ Physical printer setup:
 
 The LAN backend uses FTPS to upload to the printer SD card with the standard `bblp` user. Plain Upload sends the generated G-code file to the SD card. Upload and Print wraps the generated G-code into a minimal `.gcode.3mf` package containing `Metadata/plate_1.gcode`, uploads that package, then sends a local MQTT `project_file` start command to `device/<serial>/request`.
 
+When sending to a Bambu Lab LAN host, the upload dialog exposes Bambu print-start options:
+
+- Use AMS
+- Optional raw AMS mapping array, for example `[0,1,2,3]`
+- Build plate type
+- Bed leveling, flow calibration, vibration calibration, first layer inspection, and timelapse toggles
+
 Current limitations:
 
 - This is local LAN support only, not Bambu cloud login or device-account sync.
-- AMS slot mapping is not implemented yet. The print start command currently uses the default Bambu project-file fields and does not expose Orca/Bambu Studio's AMS mapping UI.
+- AMS support is a local print-start mapping field, not the full Orca/Bambu Studio spool sync and AMS material matching UI.
 - Printer live status, camera, HMS/errors, and file browser panels are not implemented yet.
 
 ## Current Notes

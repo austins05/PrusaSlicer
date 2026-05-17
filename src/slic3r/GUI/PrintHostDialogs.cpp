@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <sstream>
 
 #include <wx/frame.h>
 #include <wx/progdlg.h>
@@ -13,6 +14,7 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/checkbox.h>
+#include <wx/choice.h>
 #include <wx/button.h>
 #include <wx/dataview.h>
 #include <wx/wupdlock.h>
@@ -42,8 +44,16 @@ namespace GUI {
 static const char *CONFIG_KEY_PATH  = "printhost_path";
 static const char *CONFIG_KEY_GROUP = "printhost_group";
 static const char* CONFIG_KEY_STORAGE = "printhost_storage";
+static const char *CONFIG_KEY_BAMBU_USE_AMS = "bambu_lan_use_ams";
+static const char *CONFIG_KEY_BAMBU_AMS_MAPPING = "bambu_lan_ams_mapping";
+static const char *CONFIG_KEY_BAMBU_BED_TYPE = "bambu_lan_bed_type";
+static const char *CONFIG_KEY_BAMBU_BED_LEVELING = "bambu_lan_bed_leveling";
+static const char *CONFIG_KEY_BAMBU_FLOW_CALI = "bambu_lan_flow_cali";
+static const char *CONFIG_KEY_BAMBU_VIBRATION_CALI = "bambu_lan_vibration_cali";
+static const char *CONFIG_KEY_BAMBU_LAYER_INSPECT = "bambu_lan_layer_inspect";
+static const char *CONFIG_KEY_BAMBU_TIMELAPSE = "bambu_lan_timelapse";
 
-PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUploadActions post_actions, const wxArrayString &groups, const wxArrayString& storage_paths, const wxArrayString& storage_names)
+PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUploadActions post_actions, const wxArrayString &groups, const wxArrayString& storage_paths, const wxArrayString& storage_names, bool bambu_lan)
     : MsgDialog(static_cast<wxWindow*>(wxGetApp().mainframe), _L("Send G-Code to printer host"), _L("Upload to Printer Host with the following filename:"), 0) // Set style = 0 to avoid default creation of the "OK" button. 
                                                                                                                                                                // All buttons will be added later in this constructor 
     , txt_filename(new wxTextCtrl(this, wxID_ANY))
@@ -51,6 +61,7 @@ PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUplo
     , combo_storage(storage_names.GetCount() > 1 ? new wxComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, storage_names, wxCB_READONLY) : nullptr)
     , post_upload_action(PrintHostPostUploadAction::None)
     , m_paths(storage_paths)
+    , m_bambu_lan(bambu_lan)
 {
 #ifdef __APPLE__
     txt_filename->OSXDisableAllSmartSubstitutions();
@@ -88,6 +99,55 @@ PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUplo
         auto* label_group = new wxStaticText(this, wxID_ANY, _L("Upload to storage") + ": " + storage_names.front());
         content_sizer->Add(label_group);
         m_preselected_storage = storage_paths.front();
+    }
+
+    if (m_bambu_lan) {
+        auto *label_bambu = new wxStaticText(this, wxID_ANY, _L("Bambu Lab print options"));
+        label_bambu->SetFont(label_bambu->GetFont().Bold());
+        content_sizer->Add(label_bambu, 0, wxTOP, VERT_SPACING);
+
+        bambu_use_ams = new wxCheckBox(this, wxID_ANY, _L("Use AMS"));
+        bambu_use_ams->SetValue(app_config->get_bool("recent", CONFIG_KEY_BAMBU_USE_AMS));
+        content_sizer->Add(bambu_use_ams, 0, wxTOP, VERT_SPACING);
+
+        auto *label_ams_mapping = new wxStaticText(this, wxID_ANY, _L("AMS mapping"));
+        bambu_ams_mapping = new wxTextCtrl(this, wxID_ANY, from_u8(app_config->get("recent", CONFIG_KEY_BAMBU_AMS_MAPPING)));
+        bambu_ams_mapping->SetToolTip(_L("Optional raw AMS mapping array, for example [0,1,2,3]. Leave empty for the printer default."));
+        content_sizer->Add(label_ams_mapping, 0, wxTOP, VERT_SPACING);
+        content_sizer->Add(bambu_ams_mapping, 0, wxEXPAND);
+
+        wxArrayString bed_choices;
+        bed_choices.Add(_L("Printer default"));
+        bed_choices.Add(_L("Textured PEI Plate"));
+        bed_choices.Add(_L("Cool Plate"));
+        bed_choices.Add(_L("Engineering Plate"));
+        bed_choices.Add(_L("High Temperature Plate"));
+        bambu_bed_type = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, bed_choices);
+        long bed_selection = 0;
+        const std::string recent_bed_type = app_config->get("recent", CONFIG_KEY_BAMBU_BED_TYPE);
+        if (!recent_bed_type.empty())
+            from_u8(recent_bed_type).ToLong(&bed_selection);
+        if (bed_selection < 0 || bed_selection >= long(bed_choices.size()))
+            bed_selection = 0;
+        bambu_bed_type->SetSelection(int(bed_selection));
+        content_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Build plate")), 0, wxTOP, VERT_SPACING);
+        content_sizer->Add(bambu_bed_type, 0, wxEXPAND);
+
+        bambu_bed_leveling = new wxCheckBox(this, wxID_ANY, _L("Bed leveling"));
+        bambu_flow_cali = new wxCheckBox(this, wxID_ANY, _L("Flow calibration"));
+        bambu_vibration_cali = new wxCheckBox(this, wxID_ANY, _L("Vibration calibration"));
+        bambu_layer_inspect = new wxCheckBox(this, wxID_ANY, _L("First layer inspection"));
+        bambu_timelapse = new wxCheckBox(this, wxID_ANY, _L("Timelapse"));
+        bambu_bed_leveling->SetValue(app_config->get("recent", CONFIG_KEY_BAMBU_BED_LEVELING).empty() ? true : app_config->get_bool("recent", CONFIG_KEY_BAMBU_BED_LEVELING));
+        bambu_flow_cali->SetValue(app_config->get_bool("recent", CONFIG_KEY_BAMBU_FLOW_CALI));
+        bambu_vibration_cali->SetValue(app_config->get_bool("recent", CONFIG_KEY_BAMBU_VIBRATION_CALI));
+        bambu_layer_inspect->SetValue(app_config->get_bool("recent", CONFIG_KEY_BAMBU_LAYER_INSPECT));
+        bambu_timelapse->SetValue(app_config->get_bool("recent", CONFIG_KEY_BAMBU_TIMELAPSE));
+        content_sizer->Add(bambu_bed_leveling, 0, wxTOP, VERT_SPACING);
+        content_sizer->Add(bambu_flow_cali);
+        content_sizer->Add(bambu_vibration_cali);
+        content_sizer->Add(bambu_layer_inspect);
+        content_sizer->Add(bambu_timelapse, 0, wxBOTTOM, 2 * VERT_SPACING);
     }
 
 
@@ -206,6 +266,23 @@ std::string PrintHostSendDialog::storage() const
     return into_u8(m_paths[combo_storage->GetSelection()]);
 }
 
+std::string PrintHostSendDialog::data_json() const
+{
+    if (!m_bambu_lan)
+        return {};
+
+    std::ostringstream out;
+    out << "bambu_use_ams=" << (bambu_use_ams != nullptr && bambu_use_ams->GetValue() ? "1" : "0") << '\n';
+    out << "bambu_ams_mapping=" << (bambu_ams_mapping != nullptr ? into_u8(bambu_ams_mapping->GetValue()) : "") << '\n';
+    out << "bambu_bed_type=" << (bambu_bed_type != nullptr ? bambu_bed_type->GetSelection() : 0) << '\n';
+    out << "bambu_bed_leveling=" << (bambu_bed_leveling != nullptr && bambu_bed_leveling->GetValue() ? "1" : "0") << '\n';
+    out << "bambu_flow_cali=" << (bambu_flow_cali != nullptr && bambu_flow_cali->GetValue() ? "1" : "0") << '\n';
+    out << "bambu_vibration_cali=" << (bambu_vibration_cali != nullptr && bambu_vibration_cali->GetValue() ? "1" : "0") << '\n';
+    out << "bambu_layer_inspect=" << (bambu_layer_inspect != nullptr && bambu_layer_inspect->GetValue() ? "1" : "0") << '\n';
+    out << "bambu_timelapse=" << (bambu_timelapse != nullptr && bambu_timelapse->GetValue() ? "1" : "0") << '\n';
+    return out.str();
+}
+
 void PrintHostSendDialog::EndModal(int ret)
 {
     if (ret == wxID_OK) {
@@ -227,6 +304,16 @@ void PrintHostSendDialog::EndModal(int ret)
         if (combo_storage != nullptr) {
             wxString storage = combo_storage->GetValue();
             app_config->set("recent", CONFIG_KEY_STORAGE, into_u8(storage));
+        }
+        if (m_bambu_lan) {
+            app_config->set("recent", CONFIG_KEY_BAMBU_USE_AMS, bambu_use_ams != nullptr && bambu_use_ams->GetValue() ? "1" : "0");
+            app_config->set("recent", CONFIG_KEY_BAMBU_AMS_MAPPING, bambu_ams_mapping != nullptr ? into_u8(bambu_ams_mapping->GetValue()) : "");
+            app_config->set("recent", CONFIG_KEY_BAMBU_BED_TYPE, std::to_string(bambu_bed_type != nullptr ? bambu_bed_type->GetSelection() : 0));
+            app_config->set("recent", CONFIG_KEY_BAMBU_BED_LEVELING, bambu_bed_leveling != nullptr && bambu_bed_leveling->GetValue() ? "1" : "0");
+            app_config->set("recent", CONFIG_KEY_BAMBU_FLOW_CALI, bambu_flow_cali != nullptr && bambu_flow_cali->GetValue() ? "1" : "0");
+            app_config->set("recent", CONFIG_KEY_BAMBU_VIBRATION_CALI, bambu_vibration_cali != nullptr && bambu_vibration_cali->GetValue() ? "1" : "0");
+            app_config->set("recent", CONFIG_KEY_BAMBU_LAYER_INSPECT, bambu_layer_inspect != nullptr && bambu_layer_inspect->GetValue() ? "1" : "0");
+            app_config->set("recent", CONFIG_KEY_BAMBU_TIMELAPSE, bambu_timelapse != nullptr && bambu_timelapse->GetValue() ? "1" : "0");
         }
     }
 

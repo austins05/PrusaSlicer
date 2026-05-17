@@ -5,9 +5,11 @@
 #include "BambuLan.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -32,6 +34,18 @@ constexpr const char *BAMBU_LAN_USER = "bblp";
 constexpr unsigned BAMBU_FTPS_PORT = 990;
 constexpr unsigned BAMBU_MQTT_PORT = 8883;
 
+struct BambuStartOptions
+{
+    bool use_ams = false;
+    std::string ams_mapping;
+    std::string bed_type;
+    bool bed_leveling = true;
+    bool flow_cali = false;
+    bool vibration_cali = false;
+    bool layer_inspect = false;
+    bool timelapse = false;
+};
+
 std::string trim_host(std::string host)
 {
     while (!host.empty() && (host.back() == '/' || host.back() == ' '))
@@ -51,6 +65,93 @@ std::string trim_host(std::string host)
     return host;
 }
 
+std::string trim_copy(std::string text)
+{
+    const auto is_not_space = [](unsigned char c) { return !std::isspace(c); };
+    text.erase(text.begin(), std::find_if(text.begin(), text.end(), is_not_space));
+    text.erase(std::find_if(text.rbegin(), text.rend(), is_not_space).base(), text.end());
+    return text;
+}
+
+std::string lowercase(std::string text)
+{
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
+bool parse_bool(std::string value, bool default_value)
+{
+    value = lowercase(trim_copy(std::move(value)));
+    if (value == "1" || value == "true" || value == "yes" || value == "on")
+        return true;
+    if (value == "0" || value == "false" || value == "no" || value == "off")
+        return false;
+    return default_value;
+}
+
+std::map<std::string, std::string> parse_option_lines(const std::string &text)
+{
+    std::map<std::string, std::string> out;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        const size_t equal = line.find('=');
+        if (equal == std::string::npos)
+            continue;
+        out[trim_copy(line.substr(0, equal))] = trim_copy(line.substr(equal + 1));
+    }
+    return out;
+}
+
+bool raw_json_array_is_safe(const std::string &text)
+{
+    if (text.empty() || text.front() != '[' || text.back() != ']')
+        return false;
+    return std::all_of(text.begin(), text.end(), [](unsigned char c) {
+        return std::isdigit(c) || c == '[' || c == ']' || c == ',' || c == ' ' || c == '-';
+    });
+}
+
+std::string normalize_ams_mapping(std::string mapping)
+{
+    mapping = trim_copy(std::move(mapping));
+    if (mapping.empty())
+        return {};
+    if (mapping.front() != '[')
+        mapping = "[" + mapping + "]";
+    return raw_json_array_is_safe(mapping) ? mapping : std::string();
+}
+
+BambuStartOptions parse_bambu_start_options(const std::string &text)
+{
+    BambuStartOptions options;
+    const auto values = parse_option_lines(text);
+    auto get = [&values](const char *key) -> std::string {
+        auto it = values.find(key);
+        return it == values.end() ? std::string() : it->second;
+    };
+
+    options.use_ams = parse_bool(get("bambu_use_ams"), options.use_ams);
+    options.ams_mapping = normalize_ams_mapping(get("bambu_ams_mapping"));
+    options.bed_leveling = parse_bool(get("bambu_bed_leveling"), options.bed_leveling);
+    options.flow_cali = parse_bool(get("bambu_flow_cali"), options.flow_cali);
+    options.vibration_cali = parse_bool(get("bambu_vibration_cali"), options.vibration_cali);
+    options.layer_inspect = parse_bool(get("bambu_layer_inspect"), options.layer_inspect);
+    options.timelapse = parse_bool(get("bambu_timelapse"), options.timelapse);
+
+    const std::string bed_type = get("bambu_bed_type");
+    if (bed_type == "1")
+        options.bed_type = "textured_plate";
+    else if (bed_type == "2")
+        options.bed_type = "cool_plate";
+    else if (bed_type == "3")
+        options.bed_type = "eng_plate";
+    else if (bed_type == "4")
+        options.bed_type = "hot_plate";
+
+    return options;
+}
+
 std::string sanitize_remote_filename(std::string filename)
 {
     if (filename.empty())
@@ -59,12 +160,6 @@ std::string sanitize_remote_filename(std::string filename)
         if (std::string("\\/:*?\"<>|").find(c) != std::string::npos || static_cast<unsigned char>(c) < 32)
             c = '_';
     return filename;
-}
-
-std::string lowercase(std::string text)
-{
-    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return text;
 }
 
 bool ends_with(const std::string &text, const std::string &suffix)
@@ -207,7 +302,12 @@ std::vector<unsigned char> mqtt_publish_packet(const std::string &topic, const s
     return packet;
 }
 
-std::string mqtt_start_payload(const std::string &remote_filename)
+std::string bool_json(bool value)
+{
+    return value ? "true" : "false";
+}
+
+std::string mqtt_start_payload(const std::string &remote_filename, const BambuStartOptions &options)
 {
     const std::string escaped = json_escape(remote_filename);
     std::ostringstream payload;
@@ -218,12 +318,17 @@ std::string mqtt_start_payload(const std::string &remote_filename)
             << "\"param\":\"Metadata/plate_1.gcode\","
             << "\"subtask_id\":\"0\","
             << "\"subtask_name\":\"" << escaped << "\","
-            << "\"use_ams\":false,"
-            << "\"timelapse\":false,"
-            << "\"bed_leveling\":true,"
-            << "\"flow_cali\":false,"
-            << "\"vibration_cali\":false,"
-            << "\"layer_inspect\":false"
+            << "\"use_ams\":" << bool_json(options.use_ams) << ","
+            << "\"timelapse\":" << bool_json(options.timelapse) << ","
+            << "\"bed_leveling\":" << bool_json(options.bed_leveling) << ","
+            << "\"flow_cali\":" << bool_json(options.flow_cali) << ","
+            << "\"vibration_cali\":" << bool_json(options.vibration_cali) << ","
+            << "\"layer_inspect\":" << bool_json(options.layer_inspect);
+    if (!options.bed_type.empty())
+        payload << ",\"bed_type\":\"" << json_escape(options.bed_type) << "\"";
+    if (!options.ams_mapping.empty())
+        payload << ",\"ams_mapping\":" << options.ams_mapping;
+    payload
             << "}}";
     return payload.str();
 }
@@ -376,12 +481,14 @@ bool BambuLan::make_bambu_project_archive(const fs::path &source_path, fs::path 
     return true;
 }
 
-bool BambuLan::mqtt_start_print(const std::string &remote_filename, std::string &error) const
+bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::string &print_options, std::string &error) const
 {
     if (m_serial.empty()) {
         error = "Printer serial/device ID is empty. Put the X1C serial number in the Username field to start prints over LAN.";
         return false;
     }
+
+    const BambuStartOptions start_options = parse_bambu_start_options(print_options);
 
     try {
         namespace asio = boost::asio;
@@ -409,7 +516,7 @@ bool BambuLan::mqtt_start_print(const std::string &remote_filename, std::string 
         }
 
         const std::string topic = "device/" + m_serial + "/request";
-        const std::string payload = mqtt_start_payload(remote_filename);
+        const std::string payload = mqtt_start_payload(remote_filename, start_options);
         const std::vector<unsigned char> publish = mqtt_publish_packet(topic, payload);
         asio::write(stream, asio::buffer(publish));
 
@@ -472,7 +579,7 @@ bool BambuLan::upload(PrintHostUpload upload_data, ProgressFn progress_fn, Error
 
     if (upload_data.post_action == PrintHostPostUploadAction::StartPrint) {
         info_fn("Bambu Lab LAN", "Starting print");
-        if (!mqtt_start_print(remote_filename, error)) {
+        if (!mqtt_start_print(remote_filename, upload_data.data_json, error)) {
             error_fn(wxString::FromUTF8(error.c_str()));
             return false;
         }

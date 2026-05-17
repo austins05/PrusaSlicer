@@ -36,7 +36,7 @@ private:
     bool ftps_test(std::string &error) const;
     bool ftps_upload(const boost::filesystem::path &source_path, const std::string &remote_filename, ProgressFn progress_fn, std::string &error) const;
     bool make_bambu_project_archive(const boost::filesystem::path &source_path, boost::filesystem::path &archive_path, std::string &error) const;
-    bool mqtt_start_print(const std::string &remote_filename, std::string &error) const;
+    bool mqtt_start_print(const std::string &remote_filename, const std::string &print_options, std::string &error) const;
 
     std::string m_host;
     std::string m_access_code;

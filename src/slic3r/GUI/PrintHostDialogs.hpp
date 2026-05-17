@@ -19,6 +19,7 @@
 #include "../Utils/PrintHost.hpp"
 
 class wxButton;
+class wxCheckBox;
 class wxTextCtrl;
 class wxChoice;
 class wxComboBox;
@@ -31,11 +32,12 @@ namespace GUI {
 class PrintHostSendDialog : public GUI::MsgDialog
 {
 public:
-    PrintHostSendDialog(const boost::filesystem::path &path, PrintHostPostUploadActions post_actions, const wxArrayString& groups, const wxArrayString& storage_paths, const wxArrayString& storage_names);
+    PrintHostSendDialog(const boost::filesystem::path &path, PrintHostPostUploadActions post_actions, const wxArrayString& groups, const wxArrayString& storage_paths, const wxArrayString& storage_names, bool bambu_lan = false);
     boost::filesystem::path filename() const;
     PrintHostPostUploadAction post_action() const;
     std::string group() const;
     std::string storage() const;
+    std::string data_json() const;
 
     virtual void EndModal(int ret) override;
 private:
@@ -46,6 +48,15 @@ private:
     wxString    m_valid_suffix;
     wxString    m_preselected_storage;
     wxArrayString m_paths;
+    bool        m_bambu_lan { false };
+    wxCheckBox *bambu_use_ams { nullptr };
+    wxTextCtrl *bambu_ams_mapping { nullptr };
+    wxChoice   *bambu_bed_type { nullptr };
+    wxCheckBox *bambu_bed_leveling { nullptr };
+    wxCheckBox *bambu_flow_cali { nullptr };
+    wxCheckBox *bambu_vibration_cali { nullptr };
+    wxCheckBox *bambu_layer_inspect { nullptr };
+    wxCheckBox *bambu_timelapse { nullptr };
 };
 
 

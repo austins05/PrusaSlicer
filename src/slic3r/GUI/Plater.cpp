@@ -6851,7 +6851,8 @@ void Plater::send_gcode_inner(DynamicPrintConfig* physical_printer_config)
         }
     }
 
-    PrintHostSendDialog dlg(default_output_file, upload_job.printhost->get_post_upload_actions(), groups, storage_paths, storage_names);
+    const bool is_bambu_lan = std::string(upload_job.printhost->get_name()) == "Bambu Lab LAN";
+    PrintHostSendDialog dlg(default_output_file, upload_job.printhost->get_post_upload_actions(), groups, storage_paths, storage_names, is_bambu_lan);
     if (dlg.ShowModal() == wxID_OK) {
 
         if (printer_technology() == ptFFF) {
@@ -6869,6 +6870,7 @@ void Plater::send_gcode_inner(DynamicPrintConfig* physical_printer_config)
         upload_job.upload_data.post_action = dlg.post_action();
         upload_job.upload_data.group       = dlg.group();
         upload_job.upload_data.storage     = dlg.storage();
+        upload_job.upload_data.data_json   = dlg.data_json();
 
         // Show "Is printer clean" dialog for PrusaConnect - Upload and print.
         if (std::string(upload_job.printhost->get_name()) == "PrusaConnect" && upload_job.upload_data.post_action == PrintHostPostUploadAction::StartPrint) {
