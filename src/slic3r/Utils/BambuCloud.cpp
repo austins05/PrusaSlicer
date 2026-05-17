@@ -91,6 +91,12 @@ void BambuCloud::shutdown()
     m_build_login_info = nullptr;
     m_get_bambulab_host = nullptr;
     m_connect_server = nullptr;
+    m_get_user_print_info = nullptr;
+    m_query_bind_status = nullptr;
+    m_get_printer_firmware = nullptr;
+    m_send_message = nullptr;
+    m_start_subscribe = nullptr;
+    m_add_subscribe = nullptr;
 }
 
 bool BambuCloud::import_orca_plugin(std::string &error)
@@ -191,6 +197,12 @@ bool BambuCloud::load_functions(std::string &error)
     m_build_login_info = reinterpret_cast<func_build_string>(get_symbol("bambu_network_build_login_info"));
     m_get_bambulab_host = reinterpret_cast<func_build_string>(get_symbol("bambu_network_get_bambulab_host"));
     m_connect_server = reinterpret_cast<func_connect_server>(get_symbol("bambu_network_connect_server"));
+    m_get_user_print_info = reinterpret_cast<func_get_user_print_info>(get_symbol("bambu_network_get_user_print_info"));
+    m_query_bind_status = reinterpret_cast<func_query_bind_status>(get_symbol("bambu_network_query_bind_status"));
+    m_get_printer_firmware = reinterpret_cast<func_get_printer_firmware>(get_symbol("bambu_network_get_printer_firmware"));
+    m_send_message = reinterpret_cast<func_send_message>(get_symbol("bambu_network_send_message"));
+    m_start_subscribe = reinterpret_cast<func_start_subscribe>(get_symbol("bambu_network_start_subscribe"));
+    m_add_subscribe = reinterpret_cast<func_add_subscribe>(get_symbol("bambu_network_add_subscribe"));
 
     if (m_create_agent == nullptr || m_destroy_agent == nullptr || m_change_user == nullptr ||
         m_is_user_login == nullptr || m_build_login_cmd == nullptr || m_build_login_info == nullptr) {
@@ -296,6 +308,102 @@ bool BambuCloud::logout(bool request, std::string &error)
     const int result = m_user_logout(m_agent, request);
     if (result != 0) {
         error = "Bambu cloud logout failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::get_user_print_info(std::string &body, unsigned int &http_code, std::string &error)
+{
+    body.clear();
+    http_code = 0;
+    error.clear();
+    if (m_agent == nullptr || m_get_user_print_info == nullptr) {
+        error = "Bambu cloud user-printer API is not initialized.";
+        return false;
+    }
+    const int result = m_get_user_print_info(m_agent, &http_code, &body);
+    if (result != 0) {
+        error = "Bambu cloud user-printer API failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::query_bind_status(const std::vector<std::string> &device_ids, std::string &body, unsigned int &http_code, std::string &error)
+{
+    body.clear();
+    http_code = 0;
+    error.clear();
+    if (m_agent == nullptr || m_query_bind_status == nullptr) {
+        error = "Bambu cloud bind-status API is not initialized.";
+        return false;
+    }
+    const int result = m_query_bind_status(m_agent, device_ids, &http_code, &body);
+    if (result != 0) {
+        error = "Bambu cloud bind-status API failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::get_printer_firmware(const std::string &device_id, std::string &body, unsigned int &http_code, std::string &error)
+{
+    body.clear();
+    http_code = 0;
+    error.clear();
+    if (m_agent == nullptr || m_get_printer_firmware == nullptr) {
+        error = "Bambu cloud firmware API is not initialized.";
+        return false;
+    }
+    const int result = m_get_printer_firmware(m_agent, device_id, &http_code, &body);
+    if (result != 0) {
+        error = "Bambu cloud firmware API failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::send_cloud_message(const std::string &device_id, const std::string &json, int qos, int flag, std::string &error)
+{
+    error.clear();
+    if (m_agent == nullptr || m_send_message == nullptr) {
+        error = "Bambu cloud message API is not initialized.";
+        return false;
+    }
+    const int result = m_send_message(m_agent, device_id, json, qos, flag);
+    if (result != 0) {
+        error = "Bambu cloud message send failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::start_subscribe(const std::string &module, std::string &error)
+{
+    error.clear();
+    if (m_agent == nullptr || m_start_subscribe == nullptr) {
+        error = "Bambu cloud subscription API is not initialized.";
+        return false;
+    }
+    const int result = m_start_subscribe(m_agent, module);
+    if (result != 0) {
+        error = "Bambu cloud subscription failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::add_subscribe(const std::vector<std::string> &device_ids, std::string &error)
+{
+    error.clear();
+    if (m_agent == nullptr || m_add_subscribe == nullptr) {
+        error = "Bambu cloud device subscription API is not initialized.";
+        return false;
+    }
+    const int result = m_add_subscribe(m_agent, device_ids);
+    if (result != 0) {
+        error = "Bambu cloud device subscription failed with result " + std::to_string(result) + ".";
         return false;
     }
     return true;

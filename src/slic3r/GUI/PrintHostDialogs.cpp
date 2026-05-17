@@ -19,6 +19,7 @@
 #include <wx/choice.h>
 #include <wx/button.h>
 #include <wx/listbox.h>
+#include <wx/notebook.h>
 #include <wx/spinctrl.h>
 #include <wx/dataview.h>
 #include <wx/wupdlock.h>
@@ -603,6 +604,286 @@ private:
 void show_bambu_cloud_login_dialog(wxWindow *parent)
 {
     BambuCloudLoginDialog dlg(parent);
+    dlg.ShowModal();
+}
+
+namespace {
+
+std::string json_value_to_string(const nlohmann::json &object, const char *key)
+{
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null())
+        return {};
+    if (it->is_string())
+        return it->get<std::string>();
+    if (it->is_boolean())
+        return it->get<bool>() ? "true" : "false";
+    if (it->is_number_integer())
+        return std::to_string(it->get<long long>());
+    if (it->is_number_unsigned())
+        return std::to_string(it->get<unsigned long long>());
+    if (it->is_number_float())
+        return GUI::format("%1%", it->get<double>());
+    return {};
+}
+
+void collect_device_objects(const nlohmann::json &node, std::vector<nlohmann::json> &out)
+{
+    if (node.is_object()) {
+        const bool has_device_id = node.contains("dev_id") || node.contains("devId") || node.contains("device_id") || node.contains("deviceId");
+        const bool has_device_name = node.contains("dev_name") || node.contains("devName") || node.contains("name") || node.contains("printer_name");
+        if (has_device_id && has_device_name)
+            out.push_back(node);
+        for (const auto &item : node.items())
+            collect_device_objects(item.value(), out);
+    } else if (node.is_array()) {
+        for (const nlohmann::json &item : node)
+            collect_device_objects(item, out);
+    }
+}
+
+std::string first_json_string(const nlohmann::json &object, const std::initializer_list<const char*> &keys)
+{
+    if (!object.is_object())
+        return {};
+    for (const char *key : keys) {
+        const std::string value = json_value_to_string(object, key);
+        if (!value.empty())
+            return value;
+    }
+    return {};
+}
+
+} // namespace
+
+class BambuCloudDevicesDialog : public DPIDialog
+{
+public:
+    BambuCloudDevicesDialog(wxWindow *parent)
+        : DPIDialog(parent, wxID_ANY, _L("Bambu Cloud Devices"), wxDefaultPosition, wxSize(900, 680), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+    {
+        auto *topsizer = new wxBoxSizer(wxVERTICAL);
+        auto *button_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_init = new wxButton(this, wxID_ANY, _L("Initialize"));
+        auto *btn_refresh = new wxButton(this, wxID_ANY, _L("Refresh Devices"));
+        auto *btn_bind = new wxButton(this, wxID_ANY, _L("Bind Status"));
+        auto *btn_firmware = new wxButton(this, wxID_ANY, _L("Firmware"));
+        auto *btn_subscribe = new wxButton(this, wxID_ANY, _L("Subscribe"));
+        auto *btn_pushall = new wxButton(this, wxID_ANY, _L("Request Push All"));
+        button_sizer->Add(btn_init, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_refresh, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_bind, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_firmware, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_subscribe, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_pushall, 0, wxRIGHT, 6);
+        button_sizer->AddStretchSpacer();
+        button_sizer->Add(new wxButton(this, wxID_CANCEL, _L("Close")), 0);
+        topsizer->Add(button_sizer, 0, wxEXPAND | wxALL, 10);
+
+        m_tabs = new wxNotebook(this, wxID_ANY);
+        auto *devices_panel = new wxPanel(m_tabs);
+        auto *devices_sizer = new wxBoxSizer(wxVERTICAL);
+        m_devices = new wxDataViewListCtrl(devices_panel, wxID_ANY);
+        m_devices->AppendTextColumn(_L("Name"), wxDATAVIEW_CELL_INERT, FromDIP(180));
+        m_devices->AppendTextColumn(_L("Device ID"), wxDATAVIEW_CELL_INERT, FromDIP(210));
+        m_devices->AppendTextColumn(_L("Model"), wxDATAVIEW_CELL_INERT, FromDIP(110));
+        m_devices->AppendTextColumn(_L("Online"), wxDATAVIEW_CELL_INERT, FromDIP(80));
+        m_devices->AppendTextColumn(_L("IP"), wxDATAVIEW_CELL_INERT, FromDIP(120));
+        devices_sizer->Add(m_devices, 1, wxEXPAND | wxALL, 8);
+        devices_panel->SetSizer(devices_sizer);
+
+        auto *detail_panel = new wxPanel(m_tabs);
+        auto *detail_sizer = new wxBoxSizer(wxVERTICAL);
+        m_details = new wxTextCtrl(detail_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        detail_sizer->Add(m_details, 1, wxEXPAND | wxALL, 8);
+        detail_panel->SetSizer(detail_sizer);
+
+        auto *raw_panel = new wxPanel(m_tabs);
+        auto *raw_sizer = new wxBoxSizer(wxVERTICAL);
+        m_raw = new wxTextCtrl(raw_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        raw_sizer->Add(m_raw, 1, wxEXPAND | wxALL, 8);
+        raw_panel->SetSizer(raw_sizer);
+
+        m_tabs->AddPage(devices_panel, _L("Devices"));
+        m_tabs->AddPage(detail_panel, _L("Details"));
+        m_tabs->AddPage(raw_panel, _L("Raw JSON"));
+        topsizer->Add(m_tabs, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+        SetSizer(topsizer);
+        Layout();
+        CentreOnParent();
+
+        btn_init->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { initialize_cloud(true); });
+        btn_refresh->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { refresh_devices(); });
+        btn_bind->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { query_bind_status(); });
+        btn_firmware->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { query_firmware(); });
+        btn_subscribe->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { subscribe_selected(); });
+        btn_pushall->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { request_push_all(); });
+        m_devices->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent&) { update_selected_detail(); });
+
+        initialize_cloud(false);
+        refresh_devices();
+    }
+
+private:
+    void on_dpi_changed(const wxRect &suggested_rect) override
+    {
+        SetSize(suggested_rect.GetSize());
+        Layout();
+    }
+
+    std::string country_code() const
+    {
+        const AppConfig *app_config = wxGetApp().app_config;
+        return app_config->get("bambu_cloud", CONFIG_KEY_BAMBU_CLOUD_REGION) == "CN" ? "CN" : "US";
+    }
+
+    bool initialize_cloud(bool show_errors)
+    {
+        std::string error;
+        if (!BambuCloud::instance().initialize(country_code(), error)) {
+            if (show_errors)
+                show_error(this, wxString::FromUTF8(error.c_str()));
+            return false;
+        }
+        return true;
+    }
+
+    int selected_index() const
+    {
+        const wxDataViewItem item = m_devices->GetSelection();
+        if (!item.IsOk())
+            return -1;
+        return m_devices->ItemToRow(item);
+    }
+
+    std::string selected_device_id() const
+    {
+        const int idx = selected_index();
+        if (idx < 0 || size_t(idx) >= m_device_json.size())
+            return {};
+        return first_json_string(m_device_json[idx], { "dev_id", "devId", "device_id", "deviceId" });
+    }
+
+    void refresh_devices()
+    {
+        if (!initialize_cloud(true))
+            return;
+        wxBusyCursor wait;
+        std::string body;
+        std::string error;
+        unsigned int http_code = 0;
+        if (!BambuCloud::instance().get_user_print_info(body, http_code, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+
+        m_last_user_print_info = body;
+        const nlohmann::json parsed = nlohmann::json::parse(body, nullptr, false);
+        m_device_json.clear();
+        if (!parsed.is_discarded())
+            collect_device_objects(parsed, m_device_json);
+
+        m_devices->DeleteAllItems();
+        for (const nlohmann::json &device : m_device_json) {
+            wxVector<wxVariant> cols;
+            cols.push_back(wxString::FromUTF8(first_json_string(device, { "dev_name", "devName", "name", "printer_name" }).c_str()));
+            cols.push_back(wxString::FromUTF8(first_json_string(device, { "dev_id", "devId", "device_id", "deviceId" }).c_str()));
+            cols.push_back(wxString::FromUTF8(first_json_string(device, { "dev_model_name", "model", "model_id", "printer_type" }).c_str()));
+            cols.push_back(wxString::FromUTF8(first_json_string(device, { "dev_online", "online", "is_online" }).c_str()));
+            cols.push_back(wxString::FromUTF8(first_json_string(device, { "dev_ip", "ip", "lan_ip" }).c_str()));
+            m_devices->AppendItem(cols);
+        }
+        m_raw->SetValue(wxString::FromUTF8((GUI::format("HTTP: %1%\n\n%2%", http_code, body)).c_str()));
+        update_selected_detail();
+    }
+
+    void update_selected_detail()
+    {
+        const int idx = selected_index();
+        if (idx < 0 || size_t(idx) >= m_device_json.size()) {
+            m_details->SetValue(_L("Select a device."));
+            return;
+        }
+        m_details->SetValue(wxString::FromUTF8(m_device_json[idx].dump(2).c_str()));
+    }
+
+    void query_bind_status()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        wxBusyCursor wait;
+        std::string body;
+        std::string error;
+        unsigned int http_code = 0;
+        if (!BambuCloud::instance().query_bind_status({ dev_id }, body, http_code, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8((GUI::format("Bind status HTTP: %1%\n\n%2%", http_code, body)).c_str()));
+        m_tabs->SetSelection(2);
+    }
+
+    void query_firmware()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        wxBusyCursor wait;
+        std::string body;
+        std::string error;
+        unsigned int http_code = 0;
+        if (!BambuCloud::instance().get_printer_firmware(dev_id, body, http_code, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8((GUI::format("Firmware HTTP: %1%\n\n%2%", http_code, body)).c_str()));
+        m_tabs->SetSelection(2);
+    }
+
+    void subscribe_selected()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        wxBusyCursor wait;
+        std::string error;
+        if (!BambuCloud::instance().start_subscribe("printer", error) ||
+            !BambuCloud::instance().add_subscribe({ dev_id }, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8(("Subscribed to printer updates for " + dev_id).c_str()));
+        m_tabs->SetSelection(2);
+    }
+
+    void request_push_all()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        std::string error;
+        const std::string payload = "{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"0\"}}";
+        if (!BambuCloud::instance().send_cloud_message(dev_id, payload, 1, 0, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8(("Sent pushall request to " + dev_id + "\n\n" + payload).c_str()));
+        m_tabs->SetSelection(2);
+    }
+
+    wxNotebook *m_tabs { nullptr };
+    wxDataViewListCtrl *m_devices { nullptr };
+    wxTextCtrl *m_details { nullptr };
+    wxTextCtrl *m_raw { nullptr };
+    std::string m_last_user_print_info;
+    std::vector<nlohmann::json> m_device_json;
+};
+
+void show_bambu_cloud_devices_dialog(wxWindow *parent)
+{
+    BambuCloudDevicesDialog dlg(parent);
     dlg.ShowModal();
 }
 

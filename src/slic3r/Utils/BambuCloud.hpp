@@ -37,6 +37,12 @@ public:
     bool is_user_login() const;
     bool change_user(const std::string &user_info, std::string &error);
     bool logout(bool request, std::string &error);
+    bool get_user_print_info(std::string &body, unsigned int &http_code, std::string &error);
+    bool query_bind_status(const std::vector<std::string> &device_ids, std::string &body, unsigned int &http_code, std::string &error);
+    bool get_printer_firmware(const std::string &device_id, std::string &body, unsigned int &http_code, std::string &error);
+    bool send_cloud_message(const std::string &device_id, const std::string &json, int qos, int flag, std::string &error);
+    bool start_subscribe(const std::string &module, std::string &error);
+    bool add_subscribe(const std::vector<std::string> &device_ids, std::string &error);
 
     std::string build_login_cmd() const;
     std::string build_login_info() const;
@@ -65,6 +71,12 @@ private:
     using func_get_user_string = std::string (*)(void*);
     using func_build_string = std::string (*)(void*);
     using func_connect_server = int (*)(void*);
+    using func_get_user_print_info = int (*)(void*, unsigned int*, std::string*);
+    using func_query_bind_status = int (*)(void*, std::vector<std::string>, unsigned int*, std::string*);
+    using func_get_printer_firmware = int (*)(void*, std::string, unsigned int*, std::string*);
+    using func_send_message = int (*)(void*, std::string, std::string, int, int);
+    using func_start_subscribe = int (*)(void*, std::string);
+    using func_add_subscribe = int (*)(void*, std::vector<std::string>);
 
     void* get_symbol(const char *name) const;
     bool load_functions(std::string &error);
@@ -94,6 +106,12 @@ private:
     func_build_string m_build_login_info { nullptr };
     func_build_string m_get_bambulab_host { nullptr };
     func_connect_server m_connect_server { nullptr };
+    func_get_user_print_info m_get_user_print_info { nullptr };
+    func_query_bind_status m_query_bind_status { nullptr };
+    func_get_printer_firmware m_get_printer_firmware { nullptr };
+    func_send_message m_send_message { nullptr };
+    func_start_subscribe m_start_subscribe { nullptr };
+    func_add_subscribe m_add_subscribe { nullptr };
 };
 
 } // namespace Slic3r

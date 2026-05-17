@@ -152,6 +152,7 @@ wxDECLARE_EVENT(EVT_PRINTHOST_INFO, PrintHostQueueDialog::Event);
 
 void show_bambu_lan_control_dialog(wxWindow *parent);
 void show_bambu_cloud_login_dialog(wxWindow *parent);
+void show_bambu_cloud_devices_dialog(wxWindow *parent);
 }}
 
 #endif
