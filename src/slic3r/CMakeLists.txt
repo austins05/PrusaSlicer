@@ -392,6 +392,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/Secrets.cpp
     Utils/PrusaConnect.hpp
     Utils/PrusaConnect.cpp
+    Utils/BambuLan.hpp
+    Utils/BambuLan.cpp
     Utils/ServiceConfig.hpp
     Utils/ServiceConfig.cpp
 )

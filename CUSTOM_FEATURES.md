@@ -103,6 +103,24 @@ Safety behavior:
 
 The local configuration includes a Tullomer filament profile adapted from the available Tullomer guidance and the Qidi Plus 4 high-temperature setup. The active 0.02 mm Tullomer test preset enables Z stitching at 0.1 mm amplitude, 1.25 mm spacing, and a 0.35 mm minimum foundation height. That profile work lives in the local PrusaSlicer configuration rather than this source tree.
 
+## Bambu Lab X1 Carbon LAN Host
+
+The Bambu Lab vendor bundle adds an experimental Bambu Lab X1 Carbon 0.4 mm printer profile. Its default host type is Bambu Lab LAN.
+
+Physical printer setup:
+
+- Hostname/IP: X1C LAN IP address
+- API key: Bambu LAN access code
+- Username: X1C serial/device ID
+
+The LAN backend uses FTPS to upload to the printer SD card with the standard `bblp` user. Plain Upload sends the generated G-code file to the SD card. Upload and Print wraps the generated G-code into a minimal `.gcode.3mf` package containing `Metadata/plate_1.gcode`, uploads that package, then sends a local MQTT `project_file` start command to `device/<serial>/request`.
+
+Current limitations:
+
+- This is local LAN support only, not Bambu cloud login or device-account sync.
+- AMS slot mapping is not implemented yet. The print start command currently uses the default Bambu project-file fields and does not expose Orca/Bambu Studio's AMS mapping UI.
+- Printer live status, camera, HMS/errors, and file browser panels are not implemented yet.
+
 ## Current Notes
 
 These features are experimental. For production prints, test with simple geometry first, inspect preview and G-code around seams or wipe towers, and keep the custom options disabled for jobs that do not need them.

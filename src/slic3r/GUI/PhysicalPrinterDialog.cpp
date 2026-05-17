@@ -641,6 +641,11 @@ void PhysicalPrinterDialog::update(bool printer_change)
             m_optgroup->show_field("printhost_apikey", auth_type == AuthorizationType::atKeyPassword);
             for (const char* opt_key : { "printhost_user", "printhost_password" })
                 m_optgroup->show_field(opt_key, auth_type == AuthorizationType::atUserPassword); 
+        } else if (opt->value == htBambuLan) {
+            m_optgroup->hide_field("printhost_authorization_type");
+            m_optgroup->show_field("printhost_apikey", true);
+            m_optgroup->show_field("printhost_user", true);
+            m_optgroup->hide_field("printhost_password");
         } else {
             m_optgroup->hide_field("printhost_authorization_type");
             m_optgroup->show_field("printhost_apikey", true);
