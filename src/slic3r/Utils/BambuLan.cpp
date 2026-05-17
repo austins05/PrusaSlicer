@@ -458,7 +458,84 @@ std::string mqtt_camera_bool_payload(const std::string &command, bool enabled)
     payload << "{\"camera\":{"
             << "\"sequence_id\":\"0\","
             << "\"command\":\"" << json_escape(command) << "\","
-            << "\"control\":" << bool_json(enabled)
+            << "\"control\":\"" << (enabled ? "enable" : "disable") << "\""
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_camera_resolution_payload(const std::string &resolution)
+{
+    std::ostringstream payload;
+    payload << "{\"camera\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"ipcam_resolution_set\","
+            << "\"resolution\":\"" << json_escape(resolution) << "\""
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_print_option_payload(const std::string &option, bool enabled)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"print_option\","
+            << "\"" << json_escape(option) << "\":" << bool_json(enabled)
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_xcam_payload(const std::string &module, bool enabled, const std::string &sensitivity)
+{
+    std::ostringstream payload;
+    payload << "{\"xcam\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"xcam_control_set\","
+            << "\"module_name\":\"" << json_escape(module) << "\","
+            << "\"control\":" << bool_json(enabled) << ","
+            << "\"enable\":" << bool_json(enabled) << ","
+            << "\"print_halt\":true";
+    if (!sensitivity.empty())
+        payload << ",\"halt_print_sensitivity\":\"" << json_escape(sensitivity) << "\"";
+    payload << "}}";
+    return payload.str();
+}
+
+std::string mqtt_ams_control_payload(const std::string &action)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"ams_control\","
+            << "\"param\":\"" << json_escape(action) << "\""
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_ams_change_filament_payload(bool load, int ams_id, int slot_id, int current_temp, int target_temp)
+{
+    const int target = !load ? 255 : (ams_id < 16 ? ams_id * 4 + slot_id : ams_id);
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"ams_change_filament\","
+            << "\"curr_temp\":" << current_temp << ","
+            << "\"tar_temp\":" << target_temp << ","
+            << "\"ams_id\":" << ams_id << ","
+            << "\"target\":" << target << ","
+            << "\"slot_id\":" << (!load ? 255 : slot_id)
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_ams_get_rfid_payload(int ams_id, int slot_id)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"ams_get_rfid\","
+            << "\"ams_id\":" << ams_id << ","
+            << "\"slot_id\":" << slot_id
             << "}}";
     return payload.str();
 }
@@ -802,6 +879,43 @@ bool BambuLan::set_camera_recording(bool enabled, std::string &error) const
 bool BambuLan::set_camera_timelapse(bool enabled, std::string &error) const
 {
     return mqtt_publish_json(mqtt_camera_bool_payload("ipcam_timelapse", enabled), error);
+}
+
+bool BambuLan::set_camera_resolution(const std::string &resolution, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_camera_resolution_payload(resolution), error);
+}
+
+bool BambuLan::set_print_option(const std::string &option, bool enabled, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_print_option_payload(option, enabled), error);
+}
+
+bool BambuLan::set_xcam_module(const std::string &module, bool enabled, const std::string &sensitivity, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_xcam_payload(module, enabled, sensitivity), error);
+}
+
+bool BambuLan::send_ams_control(const std::string &action, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_ams_control_payload(action), error);
+}
+
+bool BambuLan::ams_change_filament(bool load, int ams_id, int slot_id, int current_temp, int target_temp, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_ams_change_filament_payload(load, ams_id, slot_id, current_temp, target_temp), error);
+}
+
+bool BambuLan::ams_refresh_rfid(int ams_id, int slot_id, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_ams_get_rfid_payload(ams_id, slot_id), error);
+}
+
+bool BambuLan::ams_calibrate(int ams_id, std::string &error) const
+{
+    std::ostringstream gcode;
+    gcode << "M620 C" << ams_id << "\n";
+    return send_gcode_line(gcode.str(), error);
 }
 
 bool BambuLan::request_status(std::string &status_json, std::string &error) const

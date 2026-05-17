@@ -43,6 +43,13 @@ public:
     bool set_print_speed(int speed_level, std::string &error) const;
     bool set_camera_recording(bool enabled, std::string &error) const;
     bool set_camera_timelapse(bool enabled, std::string &error) const;
+    bool set_camera_resolution(const std::string &resolution, std::string &error) const;
+    bool set_print_option(const std::string &option, bool enabled, std::string &error) const;
+    bool set_xcam_module(const std::string &module, bool enabled, const std::string &sensitivity, std::string &error) const;
+    bool send_ams_control(const std::string &action, std::string &error) const;
+    bool ams_change_filament(bool load, int ams_id, int slot_id, int current_temp, int target_temp, std::string &error) const;
+    bool ams_refresh_rfid(int ams_id, int slot_id, std::string &error) const;
+    bool ams_calibrate(int ams_id, std::string &error) const;
     bool list_sdcard(std::vector<std::string> &files, std::string &error) const;
     bool delete_sdcard_file(const std::string &filename, std::string &error) const;
     bool start_sdcard_file(const std::string &filename, const std::string &print_options, std::string &error) const;

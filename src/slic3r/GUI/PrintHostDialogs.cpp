@@ -389,10 +389,63 @@ public:
         speed_sizer->AddStretchSpacer();
         m_camera_recording = new wxCheckBox(this, wxID_ANY, _L("Recording"));
         m_camera_timelapse = new wxCheckBox(this, wxID_ANY, _L("Timelapse"));
+        wxArrayString camera_resolutions;
+        camera_resolutions.Add("720p");
+        camera_resolutions.Add("1080p");
+        m_camera_resolution = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, camera_resolutions);
+        m_camera_resolution->SetSelection(0);
         auto *btn_camera = new wxButton(this, wxID_ANY, _L("Set Camera"));
         speed_sizer->Add(m_camera_recording, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         speed_sizer->Add(m_camera_timelapse, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        speed_sizer->Add(m_camera_resolution, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         speed_sizer->Add(btn_camera, 0);
+
+        auto *option_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_auto_recovery = new wxCheckBox(this, wxID_ANY, _L("Recovery"));
+        m_nozzle_blob = new wxCheckBox(this, wxID_ANY, _L("Blob"));
+        m_tangle_detect = new wxCheckBox(this, wxID_ANY, _L("Tangle"));
+        m_ams_auto_refill = new wxCheckBox(this, wxID_ANY, _L("AMS refill"));
+        m_air_print = new wxCheckBox(this, wxID_ANY, _L("Air print"));
+        auto *btn_options = new wxButton(this, wxID_ANY, _L("Set Options"));
+        option_sizer->Add(m_auto_recovery, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        option_sizer->Add(m_nozzle_blob, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        option_sizer->Add(m_tangle_detect, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        option_sizer->Add(m_ams_auto_refill, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        option_sizer->Add(m_air_print, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        option_sizer->Add(btn_options, 0);
+
+        auto *xcam_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_xcam_spaghetti = new wxCheckBox(this, wxID_ANY, _L("Spaghetti"));
+        m_xcam_nozzle = new wxCheckBox(this, wxID_ANY, _L("Nozzle clump"));
+        m_xcam_first_layer = new wxCheckBox(this, wxID_ANY, _L("First layer"));
+        m_xcam_buildplate = new wxCheckBox(this, wxID_ANY, _L("Build plate"));
+        auto *btn_xcam = new wxButton(this, wxID_ANY, _L("Set XCam"));
+        xcam_sizer->Add(m_xcam_spaghetti, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        xcam_sizer->Add(m_xcam_nozzle, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        xcam_sizer->Add(m_xcam_first_layer, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        xcam_sizer->Add(m_xcam_buildplate, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        xcam_sizer->Add(btn_xcam, 0);
+
+        auto *ams_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_ams_id = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(58, -1), wxSP_ARROW_KEYS, 0, 15, 0);
+        m_ams_slot = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(58, -1), wxSP_ARROW_KEYS, 0, 3, 0);
+        m_ams_current_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 0, 360, 220);
+        m_ams_target_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 0, 360, 220);
+        auto *btn_ams_load = new wxButton(this, wxID_ANY, _L("Load"));
+        auto *btn_ams_unload = new wxButton(this, wxID_ANY, _L("Unload"));
+        auto *btn_ams_rfid = new wxButton(this, wxID_ANY, _L("RFID"));
+        auto *btn_ams_calibrate = new wxButton(this, wxID_ANY, _L("Calibrate"));
+        ams_sizer->Add(new wxStaticText(this, wxID_ANY, _L("AMS")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        ams_sizer->Add(m_ams_id, 0, wxRIGHT, 4);
+        ams_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Slot")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        ams_sizer->Add(m_ams_slot, 0, wxRIGHT, 4);
+        ams_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Temp")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        ams_sizer->Add(m_ams_current_temp, 0, wxRIGHT, 4);
+        ams_sizer->Add(m_ams_target_temp, 0, wxRIGHT, 8);
+        ams_sizer->Add(btn_ams_load, 0, wxRIGHT, 4);
+        ams_sizer->Add(btn_ams_unload, 0, wxRIGHT, 4);
+        ams_sizer->Add(btn_ams_rfid, 0, wxRIGHT, 4);
+        ams_sizer->Add(btn_ams_calibrate, 0);
 
         auto *gcode_sizer = new wxBoxSizer(wxHORIZONTAL);
         m_gcode = new wxTextCtrl(this, wxID_ANY);
@@ -409,6 +462,9 @@ public:
         topsizer->Add(button_sizer, 0, wxEXPAND | wxALL, 10);
         topsizer->Add(temp_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(speed_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(option_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(xcam_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(ams_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(gcode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Summary")), 0, wxLEFT | wxRIGHT, 10);
         topsizer->Add(m_summary, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -443,6 +499,12 @@ public:
         btn_speed->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_speed(); });
         btn_gcode->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_gcode(); });
         btn_camera->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_camera(); });
+        btn_options->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_print_options(); });
+        btn_xcam->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_xcam(); });
+        btn_ams_load->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ams_change_filament(true); });
+        btn_ams_unload->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ams_change_filament(false); });
+        btn_ams_rfid->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ams_refresh_rfid(); });
+        btn_ams_calibrate->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ams_calibrate(); });
     }
 
 private:
@@ -523,6 +585,18 @@ private:
                     if (!value.empty())
                         summary += GUI::format("%1%: %2%\n", label, value);
                 }
+                if (const auto hms = print->find("hms"); hms != print->end() && hms->is_array() && !hms->empty())
+                    summary += GUI::format("HMS items: %1%\n", hms->size());
+                if (const auto ams = print->find("ams"); ams != print->end() && ams->is_object())
+                    summary += "AMS: present\n";
+                if (const auto ipcam = print->find("ipcam"); ipcam != print->end() && ipcam->is_object()) {
+                    const std::string liveview = json_string_or_number(*ipcam, "liveview");
+                    const std::string resolution = json_string_or_number(*ipcam, "resolution");
+                    if (!liveview.empty())
+                        summary += GUI::format("Camera liveview: %1%\n", liveview);
+                    if (!resolution.empty())
+                        summary += GUI::format("Camera resolution: %1%\n", resolution);
+                }
             }
         }
         if (summary.empty())
@@ -598,7 +672,50 @@ private:
     {
         run_control_command([this](std::string &error) {
             return m_host->set_camera_recording(m_camera_recording->GetValue(), error) &&
-                   m_host->set_camera_timelapse(m_camera_timelapse->GetValue(), error);
+                   m_host->set_camera_timelapse(m_camera_timelapse->GetValue(), error) &&
+                   m_host->set_camera_resolution(into_u8(m_camera_resolution->GetStringSelection()), error);
+        });
+    }
+
+    void set_print_options()
+    {
+        run_control_command([this](std::string &error) {
+            return m_host->set_print_option("auto_recovery", m_auto_recovery->GetValue(), error) &&
+                   m_host->set_print_option("nozzle_blob_detect", m_nozzle_blob->GetValue(), error) &&
+                   m_host->set_print_option("filament_tangle_detect", m_tangle_detect->GetValue(), error) &&
+                   m_host->set_print_option("auto_switch_filament", m_ams_auto_refill->GetValue(), error) &&
+                   m_host->set_print_option("air_print_detect", m_air_print->GetValue(), error);
+        });
+    }
+
+    void set_xcam()
+    {
+        run_control_command([this](std::string &error) {
+            return m_host->set_xcam_module("spaghetti_detector", m_xcam_spaghetti->GetValue(), "medium", error) &&
+                   m_host->set_xcam_module("clump_detector", m_xcam_nozzle->GetValue(), "medium", error) &&
+                   m_host->set_xcam_module("first_layer_inspector", m_xcam_first_layer->GetValue(), std::string(), error) &&
+                   m_host->set_xcam_module("buildplate_marker_detector", m_xcam_buildplate->GetValue(), std::string(), error);
+        });
+    }
+
+    void ams_change_filament(bool load)
+    {
+        run_control_command([this, load](std::string &error) {
+            return m_host->ams_change_filament(load, m_ams_id->GetValue(), m_ams_slot->GetValue(), m_ams_current_temp->GetValue(), m_ams_target_temp->GetValue(), error);
+        });
+    }
+
+    void ams_refresh_rfid()
+    {
+        run_control_command([this](std::string &error) {
+            return m_host->ams_refresh_rfid(m_ams_id->GetValue(), m_ams_slot->GetValue(), error);
+        });
+    }
+
+    void ams_calibrate()
+    {
+        run_control_command([this](std::string &error) {
+            return m_host->ams_calibrate(m_ams_id->GetValue(), error);
         });
     }
 
@@ -647,6 +764,20 @@ private:
     wxTextCtrl *m_gcode { nullptr };
     wxCheckBox *m_camera_recording { nullptr };
     wxCheckBox *m_camera_timelapse { nullptr };
+    wxChoice *m_camera_resolution { nullptr };
+    wxCheckBox *m_auto_recovery { nullptr };
+    wxCheckBox *m_nozzle_blob { nullptr };
+    wxCheckBox *m_tangle_detect { nullptr };
+    wxCheckBox *m_ams_auto_refill { nullptr };
+    wxCheckBox *m_air_print { nullptr };
+    wxCheckBox *m_xcam_spaghetti { nullptr };
+    wxCheckBox *m_xcam_nozzle { nullptr };
+    wxCheckBox *m_xcam_first_layer { nullptr };
+    wxCheckBox *m_xcam_buildplate { nullptr };
+    wxSpinCtrl *m_ams_id { nullptr };
+    wxSpinCtrl *m_ams_slot { nullptr };
+    wxSpinCtrl *m_ams_current_temp { nullptr };
+    wxSpinCtrl *m_ams_target_temp { nullptr };
 };
 
 void show_bambu_lan_control_dialog(wxWindow *parent)
