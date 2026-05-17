@@ -12,6 +12,7 @@
 #include "libslic3r/ExtrusionRole.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/CustomGCode.hpp"
+#include "libslic3r/SequentialCollision.hpp"
 
 #include <LibBGCode/binarize/binarize.hpp>
 
@@ -133,6 +134,7 @@ namespace Slic3r {
             float temperature{ 0.0f }; // Celsius degrees
             std::array<float, static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count)> time{ 0.0f, 0.0f }; // s
             unsigned int layer_id{ 0 };
+            int object_id{ -1 };
             bool internal_only{ false };
 
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
@@ -163,7 +165,7 @@ namespace Slic3r {
         bool spiral_vase_mode;
 
         ConflictResultOpt conflict_result;
-        std::optional<std::pair<std::string, std::string>> sequential_collision_detected;
+        std::optional<SequentialCollisionInfo> sequential_collision_detected;
 
         void reset();
     };
@@ -541,6 +543,10 @@ namespace Slic3r {
         size_t m_last_default_color_id;
         float m_kissslicer_toolchange_time_correction;
         bool m_single_extruder_multi_material;
+        bool m_complete_objects;
+        float m_extruder_clearance_radius;
+        float m_extruder_clearance_height;
+        int m_active_object_id;
 
         enum class EProducer
         {
@@ -752,6 +758,7 @@ namespace Slic3r {
         void post_process();
 
         void store_move_vertex(EMoveType type, bool internal_only = false);
+        void detect_sequential_gcode_collision();
 
         void set_extrusion_role(GCodeExtrusionRole role);
 
@@ -788,5 +795,3 @@ namespace Slic3r {
 } /* namespace Slic3r */
 
 #endif /* slic3r_GCodeProcessor_hpp_ */
-
-

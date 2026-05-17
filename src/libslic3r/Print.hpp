@@ -31,6 +31,7 @@
 #include "Point.hpp"
 #include "Slicing.hpp"
 #include "SupportSpotsGenerator.hpp"
+#include "SequentialCollision.hpp"
 #include "TriangleMeshSlicer.hpp"
 #include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCode/WipeTower.hpp"
@@ -757,7 +758,7 @@ private:
     friend class PrintObject;
 
     ConflictResultOpt m_conflict_result;
-    std::optional<std::pair<std::string, std::string>> m_sequential_collision_detected; // names of objects (hit first when printing second)
+    std::optional<SequentialCollisionInfo> m_sequential_collision_detected;
 };
 
 } /* slic3r_Print_hpp_ */

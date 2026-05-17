@@ -116,6 +116,13 @@ struct ScheduledPlate {
     std::vector<ScheduledObject> scheduled_objects;
 };
 
+struct SequentialConflict {
+    int first_id = 0;
+    int second_id = 0;
+    Slic3r::Point point;
+    bool has_point = false;
+};
+
 
 /*----------------------------------------------------------------*/
 /*
@@ -150,6 +157,11 @@ std::optional<std::pair<int, int> > check_ScheduledObjectsForSequentialConflict(
 										const PrinterGeometry             &printer_geometry,
 										const std::vector<ObjectToPrint>  &objects_to_print,
 										const std::vector<ScheduledPlate> &scheduled_plates);
+
+std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDetailed(const SolverConfiguration         &solver_configuration,
+										     const PrinterGeometry             &printer_geometry,
+										     const std::vector<ObjectToPrint>  &objects_to_print,
+										     const std::vector<ScheduledPlate> &scheduled_plates);
 
     
 /*----------------------------------------------------------------*/

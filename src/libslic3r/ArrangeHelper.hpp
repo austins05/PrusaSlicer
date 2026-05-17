@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "libseqarrange/seq_interface.hpp"
+#include "libslic3r/SequentialCollision.hpp"
 
 
 
@@ -18,8 +19,8 @@ namespace Slic3r {
 
 	void arrange_model_sequential(Model& model, const ConfigBase& config);
     
-	std::optional<std::pair<std::string, std::string>> check_seq_conflict(const Model& model, const ConfigBase& config);
-	std::optional<std::pair<std::string, std::string>> check_seq_conflict(const Print& print, const ConfigBase& config);
+	std::optional<SequentialCollisionInfo> check_seq_conflict(const Model& model, const ConfigBase& config);
+	std::optional<SequentialCollisionInfo> check_seq_conflict(const Print& print, const ConfigBase& config);
 
 	// This is just a helper class to collect data for seq. arrangement, running the arrangement
 	// and applying the results to model. It is here so the processing itself can be offloaded

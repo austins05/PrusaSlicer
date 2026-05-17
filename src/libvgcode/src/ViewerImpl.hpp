@@ -177,6 +177,12 @@ public:
     void set_cog_marker_scale_factor(float factor) { m_cog_marker_scale_factor = std::max(factor, 0.001f); }
 
     const Vec3& get_tool_marker_position() const { return m_tool_marker.get_position(); }
+    void set_tool_marker_position_override(const Vec3& position)
+    {
+        m_tool_marker_position_override = position;
+        m_tool_marker_position_override_enabled = true;
+    }
+    void clear_tool_marker_position_override() { m_tool_marker_position_override_enabled = false; }
 
     float get_tool_marker_offset_z() const { return m_tool_marker.get_offset_z(); }
     void set_tool_marker_offset_z(float offset_z) { m_tool_marker.set_offset_z(offset_z); }
@@ -262,6 +268,8 @@ private:
     //
     ToolMarker m_tool_marker;
     float m_tool_marker_scale_factor{ 1.0f };
+    bool m_tool_marker_position_override_enabled{ false };
+    Vec3 m_tool_marker_position_override{ 0.0f, 0.0f, 0.0f };
 #endif // VGCODE_ENABLE_COG_AND_TOOL_MARKERS
     //
     // cpu buffer to store vertices

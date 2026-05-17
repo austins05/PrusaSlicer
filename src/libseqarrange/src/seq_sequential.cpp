@@ -6629,11 +6629,22 @@ bool refine_ConsequentialPolygonWeakNonoverlapping(z3::solver                   
 
 /*----------------------------------------------------------------*/
 
+static Vec2d line_intersection_estimate(double ax, double ay, double ux, double uy, double bx, double by, double vx, double vy)
+{
+    const double denom = ux * vy - uy * vx;
+    if (std::abs(denom) > EPSILON) {
+	const double t = ((bx - ax) * vy - (by - ay) * vx) / denom;
+	return Vec2d(ax + t * ux, ay + t * uy);
+    }
+    return Vec2d((ax + bx) * 0.5, (ay + by) * 0.5);
+}
+
 std::optional<std::pair<int, int> > check_PointsOutsidePolygons(const std::vector<Rational>                      &dec_values_X,
 								const std::vector<Rational>                      &dec_values_Y,	
 								const std::vector<Rational>                      &dec_values_T,
 								const std::vector<Slic3r::Polygon>               &polygons,
-								const std::vector<std::vector<Slic3r::Polygon> > &unreachable_polygons)
+								const std::vector<std::vector<Slic3r::Polygon> > &unreachable_polygons,
+								Slic3r::Vec2d                                    *conflict_point)
 {
     #ifdef DEBUG
     {
@@ -6839,6 +6850,8 @@ std::optional<std::pair<int, int> > check_PointsOutsidePolygons(const std::vecto
 				}
 				if (always_inside_halfplane)
 				{
+				    if (conflict_point != nullptr)
+					*conflict_point = Vec2d(dec_values_X[i].as_double() + point1.x(), dec_values_Y[i].as_double() + point1.y());
 				    return std::pair<int, int>(j, i);
 				}
 			    }
@@ -6902,6 +6915,8 @@ std::optional<std::pair<int, int> > check_PointsOutsidePolygons(const std::vecto
 				}
 				if (always_inside_halfplane)
 				{
+				    if (conflict_point != nullptr)
+					*conflict_point = Vec2d(dec_values_X[j].as_double() + point2.x(), dec_values_Y[j].as_double() + point2.y());
 				    return std::pair<int, int>(i, j);
 				}
 			    }
@@ -6934,7 +6949,8 @@ std::optional<std::pair<int, int> > check_PolygonLineIntersections(const std::ve
 								   const std::vector<Rational>                      &dec_values_Y,	
 								   const std::vector<Rational>                      &dec_values_T,
 								   const std::vector<Slic3r::Polygon>               &polygons,
-								   const std::vector<std::vector<Slic3r::Polygon> > &unreachable_polygons)
+								   const std::vector<std::vector<Slic3r::Polygon> > &unreachable_polygons,
+								   Slic3r::Vec2d                                    *conflict_point)
 {
     if (!polygons.empty())
     {
@@ -6979,6 +6995,12 @@ std::optional<std::pair<int, int> > check_PolygonLineIntersections(const std::ve
 							 next_point2.x() - point2.x(), next_point2.y() - point2.y()))
 				
 				{
+				    if (conflict_point != nullptr)
+					*conflict_point = line_intersection_estimate(
+					    dec_values_X[i].as_double() + point1.x(), dec_values_Y[i].as_double() + point1.y(),
+					    next_point1.x() - point1.x(), next_point1.y() - point1.y(),
+					    dec_values_X[j].as_double() + point2.x(), dec_values_Y[j].as_double() + point2.y(),
+					    next_point2.x() - point2.x(), next_point2.y() - point2.y());
 			            #ifdef DEBUG
 				    {
 					printf("temps: [ij: %d,%d] [%.3f, %.3f]\n", i, j,
@@ -7043,6 +7065,12 @@ std::optional<std::pair<int, int> > check_PolygonLineIntersections(const std::ve
 							     dec_values_X[j].as_double() + point2.x(), dec_values_Y[j].as_double() + point2.y(),
 							     next_point2.x() - point2.x(), next_point2.y() - point2.y()))
 				    {
+					if (conflict_point != nullptr)
+					    *conflict_point = line_intersection_estimate(
+						dec_values_X[i].as_double() + point1.x(), dec_values_Y[i].as_double() + point1.y(),
+						next_point1.x() - point1.x(), next_point1.y() - point1.y(),
+						dec_values_X[j].as_double() + point2.x(), dec_values_Y[j].as_double() + point2.y(),
+						next_point2.x() - point2.x(), next_point2.y() - point2.y());
 			                #ifdef DEBUG
 					{
 					    printf("temps: [ij: %d,%d] [%.3f, %.3f]\n", i, j,

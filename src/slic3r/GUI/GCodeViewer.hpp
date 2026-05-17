@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <float.h>
+#include <optional>
 #include <set>
 #include <unordered_set>
 
@@ -235,6 +236,7 @@ private:
     std::vector<float> m_filament_diameters;
     std::vector<float> m_filament_densities;
     SequentialView m_sequential_view;
+    std::optional<Vec3f> m_sequential_collision_marker_override;
     Shells m_shells;
     COG m_cog;
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
@@ -268,7 +270,7 @@ private:
     bool m_contained_in_bed{ true };
 
     ConflictResultOpt m_conflict_result;
-    std::optional<std::pair<std::string, std::string>> m_sequential_collision_detected;
+    std::optional<SequentialCollisionInfo> m_sequential_collision_detected;
 
     libvgcode::Viewer m_viewer;
     bool m_loaded_as_preview{ false };
@@ -365,7 +367,8 @@ public:
     void invalidate_legend() { m_legend_resizer.reset(); }
 
     const ConflictResultOpt& get_conflict_result() const { return m_conflict_result; }
-    std::optional<std::pair<std::string, std::string>> get_sequential_collision_detected() const { return m_sequential_collision_detected; }
+    std::optional<SequentialCollisionInfo> get_sequential_collision_detected() const { return m_sequential_collision_detected; }
+    void show_sequential_collision_point(const Vec2d& point);
 
     void load_shells(const Print& print);
 

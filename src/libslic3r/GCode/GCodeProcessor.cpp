@@ -25,6 +25,12 @@
 #include <float.h>
 #include <assert.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <cmath>
+#include <limits>
+
 #if __has_include(<charconv>)
     #include <charconv>
     #include <utility>
@@ -68,6 +74,110 @@ const std::vector<std::string> GCodeProcessor::Reserved_Tags = {
 
 const float GCodeProcessor::Wipe_Width = 0.05f;
 const float GCodeProcessor::Wipe_Height = 0.05f;
+
+namespace {
+
+struct SequentialGCodeBBox
+{
+    int object_id{ -1 };
+    std::string name;
+    Vec3f min{ Vec3f::Constant(std::numeric_limits<float>::max()) };
+    Vec3f max{ Vec3f::Constant(std::numeric_limits<float>::lowest()) };
+    bool valid{ false };
+
+    void merge(const Vec3f& point)
+    {
+        min = min.cwiseMin(point);
+        max = max.cwiseMax(point);
+        valid = true;
+    }
+};
+
+static float point_to_rect_distance_sq(const Vec2f& point, const SequentialGCodeBBox& rect)
+{
+    const float dx = (point.x() < rect.min.x()) ? rect.min.x() - point.x() :
+        ((point.x() > rect.max.x()) ? point.x() - rect.max.x() : 0.0f);
+    const float dy = (point.y() < rect.min.y()) ? rect.min.y() - point.y() :
+        ((point.y() > rect.max.y()) ? point.y() - rect.max.y() : 0.0f);
+    return dx * dx + dy * dy;
+}
+
+static Vec2f closest_point_on_segment_to_point(const Vec2f& a, const Vec2f& b, const Vec2f& point)
+{
+    const Vec2f ab = b - a;
+    const float len_sq = ab.squaredNorm();
+    if (len_sq <= std::numeric_limits<float>::epsilon())
+        return a;
+    const float t = std::clamp((point - a).dot(ab) / len_sq, 0.0f, 1.0f);
+    return a + t * ab;
+}
+
+static bool segment_intersection(const Vec2f& a, const Vec2f& b, const Vec2f& c, const Vec2f& d, Vec2f& out)
+{
+    const Vec2f r = b - a;
+    const Vec2f s = d - c;
+    const float denom = r.x() * s.y() - r.y() * s.x();
+    if (std::abs(denom) <= 1e-6f)
+        return false;
+
+    const Vec2f ca = c - a;
+    const float t = (ca.x() * s.y() - ca.y() * s.x()) / denom;
+    const float u = (ca.x() * r.y() - ca.y() * r.x()) / denom;
+    if (t < 0.0f || t > 1.0f || u < 0.0f || u > 1.0f)
+        return false;
+
+    out = a + t * r;
+    return true;
+}
+
+static Vec2f closest_point_on_segment_to_bbox_xy(const Vec2f& a, const Vec2f& b, const SequentialGCodeBBox& rect)
+{
+    if (point_to_rect_distance_sq(a, rect) == 0.0f)
+        return a;
+    if (point_to_rect_distance_sq(b, rect) == 0.0f)
+        return b;
+
+    const Vec2f min(rect.min.x(), rect.min.y());
+    const Vec2f max(rect.max.x(), rect.max.y());
+    const std::array<std::pair<Vec2f, Vec2f>, 4> edges{ {
+        { Vec2f(min.x(), min.y()), Vec2f(max.x(), min.y()) },
+        { Vec2f(max.x(), min.y()), Vec2f(max.x(), max.y()) },
+        { Vec2f(max.x(), max.y()), Vec2f(min.x(), max.y()) },
+        { Vec2f(min.x(), max.y()), Vec2f(min.x(), min.y()) }
+    } };
+
+    Vec2f intersection;
+    for (const auto& edge : edges)
+        if (segment_intersection(a, b, edge.first, edge.second, intersection))
+            return intersection;
+
+    Vec2f best = a;
+    float best_dist_sq = point_to_rect_distance_sq(a, rect);
+    const float end_dist_sq = point_to_rect_distance_sq(b, rect);
+    if (end_dist_sq < best_dist_sq) {
+        best = b;
+        best_dist_sq = end_dist_sq;
+    }
+
+    const std::array<Vec2f, 4> corners{ {
+        Vec2f(min.x(), min.y()),
+        Vec2f(max.x(), min.y()),
+        Vec2f(max.x(), max.y()),
+        Vec2f(min.x(), max.y())
+    } };
+    for (const Vec2f& corner : corners) {
+        Vec2f candidate = closest_point_on_segment_to_point(a, b, corner);
+        const float dist_sq = point_to_rect_distance_sq(candidate, rect);
+        if (dist_sq < best_dist_sq) {
+            best = candidate;
+            best_dist_sq = dist_sq;
+        }
+    }
+
+    return best;
+}
+
+} // namespace
 
 bgcode::binarize::BinarizerConfig GCodeProcessor::s_binarizer_config{
     {
@@ -641,6 +751,9 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
     m_flavor = config.gcode_flavor;
 
     m_result.backtrace_enabled = is_XL_printer(config);
+    m_complete_objects = config.complete_objects.value;
+    m_extruder_clearance_radius = static_cast<float>(config.extruder_clearance_radius.value);
+    m_extruder_clearance_height = static_cast<float>(config.extruder_clearance_height.value);
 
     size_t extruders_count = config.nozzle_diameter.values.size();
     m_result.extruders_count = extruders_count;
@@ -1093,6 +1206,10 @@ void GCodeProcessor::reset()
     m_kissslicer_toolchange_time_correction = 0.0f;
 
     m_single_extruder_multi_material = false;
+    m_complete_objects = false;
+    m_extruder_clearance_radius = 0.0f;
+    m_extruder_clearance_height = 0.0f;
+    m_active_object_id = -1;
 }
 
 static inline const char* skip_whitespaces(const char *begin, const char *end) {
@@ -1395,6 +1512,7 @@ void GCodeProcessor::finalize(bool perform_post_process)
     }
 
     calculate_time(m_result);
+    detect_sequential_gcode_collision();
 
     // process the time blocks
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
@@ -1791,6 +1909,17 @@ void GCodeProcessor::process_gcode_line(const GCodeReader::GCodeLine& line, bool
                         default: break;
                         }
                         break;
+                    case '8':
+                        switch (cmd[3]) {
+                        case '6': {
+                            int object_id = -1;
+                            if (line.has_value('S', object_id))
+                                m_active_object_id = object_id;
+                            break;
+                        }
+                        default: break;
+                        }
+                        break;
                     default:
                         break;
                     }
@@ -1837,10 +1966,24 @@ void GCodeProcessor::process_gcode_line(const GCodeReader::GCodeLine& line, bool
     }
     else {
         const std::string &comment = line.raw();
-        if (comment.length() > 2 && comment.front() == ';')
+        if (comment.length() > 2 && comment.front() == ';') {
+            static constexpr const char* sequential_object_tag = "; sequential print object ";
+            if (comment.rfind(sequential_object_tag, 0) == 0) {
+                const std::string key = "model_instance_id=";
+                const size_t pos = comment.find(key);
+                if (pos != std::string::npos) {
+                    const size_t value_begin = pos + key.size();
+                    size_t value_end = value_begin;
+                    while (value_end < comment.size() && std::isdigit(static_cast<unsigned char>(comment[value_end])))
+                        ++value_end;
+                    if (value_end > value_begin)
+                        m_active_object_id = std::strtol(comment.c_str() + value_begin, nullptr, 10);
+                }
+            }
             // Process tags embedded into comments. Tag comments always start at the start of a line
             // with a comment and continue with a tag without any whitespace separator.
             process_tags(comment.substr(1), producers_enabled);
+        }
     }
 }
 
@@ -4529,6 +4672,86 @@ void GCodeProcessor::post_process()
             "Is " + out_path + " locked?" + '\n');
 }
 
+void GCodeProcessor::detect_sequential_gcode_collision()
+{
+    if (!m_complete_objects || m_result.sequential_collision_detected || m_extruder_clearance_radius <= 0.0f || m_extruder_clearance_height <= 0.0f)
+        return;
+
+    const float safety_margin = 5.0f;
+    const float clearance_radius = m_extruder_clearance_radius + safety_margin;
+    const float clearance_radius_sq = clearance_radius * clearance_radius;
+
+    auto object_name = [this](int object_id) {
+        if (m_print != nullptr) {
+            for (const ModelObject* mo : m_print->model().objects)
+                for (const ModelInstance* mi : mo->instances)
+                    if (int(mi->id().id) == object_id)
+                        return mo->name;
+        }
+        return std::string("object ") + std::to_string(object_id);
+    };
+
+    std::vector<SequentialGCodeBBox> completed;
+    SequentialGCodeBBox current;
+    int current_object_id = -1;
+
+    auto complete_current = [&]() {
+        if (current.valid) {
+            current.name = object_name(current.object_id);
+            completed.emplace_back(current);
+        }
+        current = SequentialGCodeBBox();
+        current_object_id = -1;
+    };
+
+    for (size_t i = 1; i < m_result.moves.size(); ++i) {
+        const GCodeProcessorResult::MoveVertex& prev = m_result.moves[i - 1];
+        const GCodeProcessorResult::MoveVertex& move = m_result.moves[i];
+        const int object_id = move.object_id;
+
+        if (object_id < 0)
+            continue;
+
+        if (current_object_id >= 0 && object_id != current_object_id)
+            complete_current();
+
+        if (current_object_id < 0) {
+            current_object_id = object_id;
+            current.object_id = object_id;
+        }
+
+        const Vec2f a(prev.position.x(), prev.position.y());
+        const Vec2f b(move.position.x(), move.position.y());
+        const float segment_min_z = std::min(prev.position.z(), move.position.z());
+
+        for (const SequentialGCodeBBox& printed : completed) {
+            if (segment_min_z + m_extruder_clearance_height >= printed.max.z())
+                continue;
+
+            const Vec2f closest = closest_point_on_segment_to_bbox_xy(a, b, printed);
+            if (point_to_rect_distance_sq(closest, printed) > clearance_radius_sq)
+                continue;
+
+            SequentialCollisionInfo collision;
+            collision.hit_object = printed.name;
+            collision.printing_object = object_name(object_id);
+            collision.point = Vec2d(closest.x(), closest.y());
+            m_result.sequential_collision_detected = collision;
+
+            BOOST_LOG_TRIVIAL(warning) << boost::format(
+                "Sequential generated G-code clearance risk: %1% may hit %2% near X=%3$.2f Y=%4$.2f at G-code line %5%")
+                % collision.printing_object % collision.hit_object % closest.x() % closest.y() % move.gcode_id;
+            return;
+        }
+
+        if ((move.type == EMoveType::Extrude || move.type == EMoveType::Wipe) && move.delta_extruder > 0.0f) {
+            if (prev.object_id == object_id)
+                current.merge(prev.position);
+            current.merge(move.position);
+        }
+    }
+}
+
 void GCodeProcessor::store_move_vertex(EMoveType type, bool internal_only)
 {
     m_last_line_id = (type == EMoveType::Color_change || type == EMoveType::Pause_Print || type == EMoveType::Custom_GCode) ?
@@ -4552,6 +4775,7 @@ void GCodeProcessor::store_move_vertex(EMoveType type, bool internal_only)
         m_extruder_temps[m_extruder_id],
         { 0.0f, 0.0f }, // time
         std::max<unsigned int>(1, m_layer_id) - 1,
+        m_active_object_id,
         internal_only
     });
 
@@ -4925,4 +5149,3 @@ float GCodeProcessor::calc_junction_acceleration(const TimeBlock &block, const V
 }
 
 } /* namespace Slic3r */
-

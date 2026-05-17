@@ -15,6 +15,8 @@
 #include "seq_preprocess.hpp"
 #include "libseqarrange/seq_interface.hpp"
 
+#include <cmath>
+
 
 /*----------------------------------------------------------------*/
 
@@ -199,6 +201,21 @@ std::optional<std::pair<int, int> > check_ScheduledObjectsForSequentialConflict(
 										const std::vector<ObjectToPrint>  &objects_to_print,
 										const std::vector<ScheduledPlate> &scheduled_plates)
 {
+    if (auto conflict = check_ScheduledObjectsForSequentialConflictDetailed(solver_configuration,
+									    printer_geometry,
+									    objects_to_print,
+									    scheduled_plates))
+    {
+	return std::pair<int, int>(conflict->first_id, conflict->second_id);
+    }
+    return {};
+}
+
+std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDetailed(const SolverConfiguration         &solver_configuration,
+										     const PrinterGeometry             &printer_geometry,
+										     const std::vector<ObjectToPrint>  &objects_to_print,
+										     const std::vector<ScheduledPlate> &scheduled_plates)
+{
     std::vector<Slic3r::Polygon> polygons;
     std::vector<std::vector<Slic3r::Polygon> > unreachable_polygons;
 
@@ -288,13 +305,21 @@ std::optional<std::pair<int, int> > check_ScheduledObjectsForSequentialConflict(
 	}
 	#endif       
 	
+	Vec2d conflict_point(0., 0.);
 	if (auto conflict = check_PointsOutsidePolygons(dec_values_X,
 							dec_values_Y,
 							dec_values_T,
 							plate_polygons,
-							plate_unreachable_polygons))
+							plate_unreachable_polygons,
+							&conflict_point))
 	{
-	    return std::pair<int, int>(scheduled_plate.scheduled_objects[conflict.value().first].id, scheduled_plate.scheduled_objects[conflict.value().second].id);
+	    return SequentialConflict{
+		scheduled_plate.scheduled_objects[conflict.value().first].id,
+		scheduled_plate.scheduled_objects[conflict.value().second].id,
+		Point(coord_t(std::llround(conflict_point.x() * SEQ_SLICER_SCALE_FACTOR)),
+		      coord_t(std::llround(conflict_point.y() * SEQ_SLICER_SCALE_FACTOR))),
+		true
+	    };
 	}
 	#ifdef DEBUG
 	{
@@ -312,9 +337,16 @@ std::optional<std::pair<int, int> > check_ScheduledObjectsForSequentialConflict(
 							    dec_values_Y,
 							    dec_values_T,
 							    plate_polygons,
-							    plate_unreachable_polygons))
+							    plate_unreachable_polygons,
+							    &conflict_point))
 	{
-	    return std::pair<int, int>(scheduled_plate.scheduled_objects[conflict.value().first].id, scheduled_plate.scheduled_objects[conflict.value().second].id);
+	    return SequentialConflict{
+		scheduled_plate.scheduled_objects[conflict.value().first].id,
+		scheduled_plate.scheduled_objects[conflict.value().second].id,
+		Point(coord_t(std::llround(conflict_point.x() * SEQ_SLICER_SCALE_FACTOR)),
+		      coord_t(std::llround(conflict_point.y() * SEQ_SLICER_SCALE_FACTOR))),
+		true
+	    };
 	}
 	#ifdef DEBUG
 	{

@@ -50,6 +50,8 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 
 
 namespace Slic3r {
@@ -65,6 +67,33 @@ static float sequential_wipe_tower_preview_depth(const PrintConfig &config)
 {
     const float depth = float(config.wipe_tower_depth.value);
     return depth <= 0.f ? 15.f : depth;
+}
+
+static bool is_finite_xy(const libvgcode::Vec3& position)
+{
+    return std::isfinite(position[0]) && std::isfinite(position[1]);
+}
+
+static double point_segment_distance_sq(const Vec2d& point, const libvgcode::Vec3& a, const libvgcode::Vec3& b)
+{
+    const Vec2d start(a[0], a[1]);
+    const Vec2d end(b[0], b[1]);
+    const Vec2d segment = end - start;
+    const double len_sq = segment.squaredNorm();
+    if (len_sq <= EPSILON)
+        return (point - end).squaredNorm();
+
+    const double t = std::clamp((point - start).dot(segment) / len_sq, 0.0, 1.0);
+    return (point - (start + t * segment)).squaredNorm();
+}
+
+static bool is_head_positioning_move(const libvgcode::PathVertex& vertex)
+{
+    return vertex.is_travel() || vertex.is_wipe() ||
+           vertex.type == libvgcode::EMoveType::ToolChange ||
+           vertex.type == libvgcode::EMoveType::CustomGCode ||
+           vertex.type == libvgcode::EMoveType::Retract ||
+           vertex.type == libvgcode::EMoveType::Unretract;
 }
 
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
@@ -1264,9 +1293,79 @@ void GCodeViewer::update_shells_color_by_extruder(const DynamicPrintConfig* conf
         m_shells.volumes.update_colors_by_extruder(config);
 }
 
+void GCodeViewer::show_sequential_collision_point(const Vec2d& point)
+{
+    std::optional<size_t> nearest_head_move_id;
+    std::optional<size_t> nearest_any_move_id;
+    double nearest_head_move_dist_sq = std::numeric_limits<double>::max();
+    double nearest_any_move_dist_sq = std::numeric_limits<double>::max();
+
+    const libvgcode::Interval& search_range = m_viewer.get_view_full_range();
+    if (m_viewer.get_vertices_count() > 0 && search_range[1] >= search_range[0]) {
+        for (size_t i = search_range[0]; i <= search_range[1]; ++i) {
+            const libvgcode::PathVertex& vertex = m_viewer.get_vertex_at(i);
+            if (!is_finite_xy(vertex.position))
+                continue;
+
+            double dist_sq = (point - Vec2d(vertex.position[0], vertex.position[1])).squaredNorm();
+            if (i > search_range[0]) {
+                const libvgcode::PathVertex& prev = m_viewer.get_vertex_at(i - 1);
+                if (is_finite_xy(prev.position))
+                    dist_sq = std::min(dist_sq, point_segment_distance_sq(point, prev.position, vertex.position));
+            }
+
+            if (is_head_positioning_move(vertex) && dist_sq < nearest_head_move_dist_sq) {
+                nearest_head_move_dist_sq = dist_sq;
+                nearest_head_move_id = i;
+            }
+
+            if (dist_sq < nearest_any_move_dist_sq) {
+                nearest_any_move_dist_sq = dist_sq;
+                nearest_any_move_id = i;
+            }
+        }
+    }
+
+    const std::optional<size_t> nearest_vertex_id = nearest_head_move_id.has_value() ? nearest_head_move_id : nearest_any_move_id;
+    float z = 0.0f;
+    if (nearest_vertex_id.has_value()) {
+        const libvgcode::PathVertex& vertex = m_viewer.get_vertex_at(*nearest_vertex_id);
+        z = vertex.position[2];
+
+        wxGetApp().plater()->set_preview_layers_slider_values_range(0, static_cast<int>(vertex.layer_id));
+
+        const libvgcode::Interval& enabled_range = m_viewer.get_view_enabled_range();
+        const uint32_t visible_min = enabled_range[0];
+        const uint32_t visible_max = static_cast<uint32_t>(std::clamp(*nearest_vertex_id,
+            static_cast<size_t>(enabled_range[0]), static_cast<size_t>(enabled_range[1])));
+
+        m_viewer.set_view_visible_range(visible_min, visible_max);
+        wxGetApp().plater()->enable_preview_moves_slider(enabled_range[1] > enabled_range[0]);
+        wxGetApp().plater()->update_preview_moves_slider(static_cast<int>(visible_min), static_cast<int>(visible_max));
+    }
+    else if (m_viewer.get_vertices_count() > 0)
+        z = m_viewer.get_current_vertex().position[2];
+
+    m_sequential_collision_marker_override = Vec3f(float(point.x()), float(point.y()), z);
+
+#if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+    if (!m_viewer.is_option_visible(libvgcode::EOptionType::ToolMarker))
+        m_viewer.toggle_option_visibility(libvgcode::EOptionType::ToolMarker);
+
+    m_viewer.set_tool_marker_position_override({ float(point.x()), float(point.y()), z });
+#else
+    m_sequential_view.marker.set_visible(true);
+    m_sequential_view.marker.set_world_position(Vec3f(float(point.x()), float(point.y()), 0.0f));
+#endif // VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+}
+
 void GCodeViewer::reset()
 {
     m_viewer.reset();
+#if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+    m_viewer.clear_tool_marker_position_override();
+#endif // VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+    m_sequential_collision_marker_override.reset();
 
     m_paths_bounding_box.reset();
     m_max_bounding_box.reset();
@@ -1295,9 +1394,10 @@ void GCodeViewer::render()
     float legend_height = 0.0f;
     if (m_viewer.get_layers_count() > 0) {
         render_legend(legend_height);
-        if (m_viewer.get_view_enabled_range()[1] != m_viewer.get_view_visible_range()[1]) {
+        const libvgcode::Interval& enabled_range = m_viewer.get_view_enabled_range();
+        if (enabled_range[1] > enabled_range[0]) {
             const libvgcode::PathVertex& curr_vertex = m_viewer.get_current_vertex();
-            m_sequential_view.marker.set_world_position(libvgcode::convert(curr_vertex.position));
+            m_sequential_view.marker.set_world_position(m_sequential_collision_marker_override.value_or(libvgcode::convert(curr_vertex.position)));
             m_sequential_view.marker.set_z_offset(m_z_offset);
 
             // Following just makes sure that the shown marker is correct.
@@ -1306,7 +1406,7 @@ void GCodeViewer::render()
             if (marker_model_opt.has_value())
                 m_max_bounding_box.reset();
 
-            m_sequential_view.render(legend_height, &m_viewer, curr_vertex.gcode_id);
+            m_sequential_view.render(legend_height, m_sequential_collision_marker_override.has_value() ? nullptr : &m_viewer, curr_vertex.gcode_id);
         }
     }
 
@@ -1358,6 +1458,10 @@ bool GCodeViewer::can_export_toolpaths() const
 
 void GCodeViewer::update_sequential_view_current(unsigned int first, unsigned int last)
 {
+    m_sequential_collision_marker_override.reset();
+#if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+    m_viewer.clear_tool_marker_position_override();
+#endif // VGCODE_ENABLE_COG_AND_TOOL_MARKERS
     m_viewer.set_view_visible_range(static_cast<uint32_t>(first), static_cast<uint32_t>(last));
     const libvgcode::Interval& enabled_range = m_viewer.get_view_enabled_range();
     wxGetApp().plater()->enable_preview_moves_slider(enabled_range[1] > enabled_range[0]);

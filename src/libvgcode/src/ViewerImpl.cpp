@@ -1665,6 +1665,25 @@ static bool is_visible(const PathVertex& v, const Settings& settings)
     }
 }
 
+static bool is_visible_for_marker_range(const PathVertex& v, const Settings& settings)
+{
+    if (is_visible(v, settings))
+        return true;
+
+#if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+    if (!settings.options_visibility[size_t(EOptionType::ToolMarker)])
+        return false;
+
+    return v.is_travel() || v.is_wipe() ||
+           v.type == EMoveType::ToolChange ||
+           v.type == EMoveType::CustomGCode ||
+           v.type == EMoveType::Retract ||
+           v.type == EMoveType::Unretract;
+#else
+    return false;
+#endif // VGCODE_ENABLE_COG_AND_TOOL_MARKERS
+}
+
 void ViewerImpl::update_view_full_range()
 {
     const Interval& layers_range = m_layers.get_view_range();
@@ -1673,7 +1692,7 @@ void ViewerImpl::update_view_full_range()
 
     auto first_it = m_vertices.begin();
     while (first_it != m_vertices.end() &&
-           (first_it->layer_id < layers_range[0] || !is_visible(*first_it, m_settings))) {
+           (first_it->layer_id < layers_range[0] || !is_visible_for_marker_range(*first_it, m_settings))) {
         ++first_it;
     }
 
@@ -1709,7 +1728,7 @@ void ViewerImpl::update_view_full_range()
             --rev_last_it;
 
         bool reduced = false;
-        while (rev_last_it != rev_first_it && !is_visible(*rev_last_it, m_settings)) {
+        while (rev_last_it != rev_first_it && !is_visible_for_marker_range(*rev_last_it, m_settings)) {
             ++rev_last_it;
             reduced = true;
         }
@@ -1735,7 +1754,7 @@ void ViewerImpl::update_view_full_range()
             const Interval& full_range = m_view_range.get_full();
             auto top_first_it = m_vertices.begin() + full_range[0];
             bool shortened = false;
-            while (top_first_it != m_vertices.end() && (top_first_it->layer_id < layers_range[1] || !is_visible(*top_first_it, m_settings))) {
+            while (top_first_it != m_vertices.end() && (top_first_it->layer_id < layers_range[1] || !is_visible_for_marker_range(*top_first_it, m_settings))) {
                 ++top_first_it;
                 shortened = true;
             }
@@ -2049,10 +2068,10 @@ void ViewerImpl::render_tool_marker(const Mat4x4& view_matrix, const Mat4x4& pro
     if (m_tool_marker_shader_id == 0)
         return;
 
-    if (m_view_range.get_visible()[1] == m_view_range.get_enabled()[1])
+    if (!m_tool_marker_position_override_enabled && m_view_range.get_visible()[1] == m_view_range.get_enabled()[1])
         return;
 
-    m_tool_marker.set_position(get_current_vertex().position);
+    m_tool_marker.set_position(m_tool_marker_position_override_enabled ? m_tool_marker_position_override : get_current_vertex().position);
 
     int curr_shader;
     glsafe(glGetIntegerv(GL_CURRENT_PROGRAM, &curr_shader));

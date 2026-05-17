@@ -378,6 +378,16 @@ const Vec3& Viewer::get_tool_marker_position() const
     return m_impl->get_tool_marker_position();
 }
 
+void Viewer::set_tool_marker_position_override(const Vec3& position)
+{
+    m_impl->set_tool_marker_position_override(position);
+}
+
+void Viewer::clear_tool_marker_position_override()
+{
+    m_impl->clear_tool_marker_position_override();
+}
+
 float Viewer::get_tool_marker_offset_z() const
 {
     return m_impl->get_tool_marker_offset_z();

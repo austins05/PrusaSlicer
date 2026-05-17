@@ -43,6 +43,10 @@
 #include "NotificationManager.hpp"
 #include "libslic3r/MultipleBeds.hpp"
 
+#include <algorithm>
+#include <iterator>
+#include <optional>
+
 #ifdef _WIN32
 #include "BitmapComboBox.hpp"
 #endif
@@ -890,6 +894,28 @@ void Preview::update_moves_slider(std::optional<int> visible_range_min, std::opt
         }
     }
 
+    auto nearest_slider_pos = [&values](int vertex_id) -> std::optional<uint32_t> {
+        if (values.empty())
+            return std::nullopt;
+
+        const unsigned int target = static_cast<unsigned int>(std::max(vertex_id, 0) + 1);
+        auto it = std::lower_bound(values.begin(), values.end(), target);
+        if (it == values.end())
+            return static_cast<uint32_t>(values.size() - 1);
+        if (it == values.begin())
+            return 0;
+
+        const auto prev = std::prev(it);
+        return (target - *prev <= *it - target) ?
+            static_cast<uint32_t>(std::distance(values.begin(), prev)) :
+            static_cast<uint32_t>(std::distance(values.begin(), it));
+    };
+
+    if (!visible_range_min_id.has_value() && visible_range_min.has_value())
+        visible_range_min_id = nearest_slider_pos(*visible_range_min);
+    if (!visible_range_max_id.has_value() && visible_range_max.has_value())
+        visible_range_max_id = nearest_slider_pos(*visible_range_max);
+
     const int span_min_id = visible_range_min_id.has_value() ? *visible_range_min_id : 0;
     const int span_max_id = visible_range_max_id.has_value() ? *visible_range_max_id : static_cast<int>(values.size()) - 1;
 
@@ -899,6 +925,7 @@ void Preview::update_moves_slider(std::optional<int> visible_range_min, std::opt
     m_moves_slider->Freeze();
     m_moves_slider->SetMaxPos(static_cast<int>(values.size()) - 1);
     m_moves_slider->SetSelectionSpan(span_min_id, span_max_id);
+    m_moves_slider->SetHigherPos(span_max_id);
     m_moves_slider->Thaw();
 
     m_moves_slider->ShowLowerThumb(get_app_config()->get("seq_top_layer_only") == "0");

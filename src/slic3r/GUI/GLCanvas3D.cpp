@@ -1765,6 +1765,17 @@ void GLCanvas3D::zoom_to_gcode()
     _zoom_to_box(m_gcode_viewer.get_paths_bounding_box(), 1.05);
 }
 
+void GLCanvas3D::show_sequential_collision_point(const Vec2d& point)
+{
+    m_gcode_viewer.show_sequential_collision_point(point);
+
+    const Vec3d center(point.x(), point.y(), 0.0);
+    BoundingBoxf3 box(center - Vec3d(15.0, 15.0, 0.0), center + Vec3d(15.0, 15.0, 30.0));
+    _zoom_to_box(box, 1.2);
+    set_as_dirty();
+    request_extra_frame();
+}
+
 void GLCanvas3D::select_view(const std::string& direction)
 {
     wxGetApp().plater()->get_camera().select_view(direction);
@@ -7461,9 +7472,13 @@ void GLCanvas3D::_set_warning_notification(EWarning warning, bool state)
         auto conflict = m_gcode_viewer.get_sequential_collision_detected();
         if (! conflict.has_value())
             break;
-        // TRN: Placeholders contain names of the colliding objects.
-        text = format(_u8L("Extruder will crash into %1% while printing %2%."),
-                   conflict->first, conflict->second);
+        // TRN: Placeholders contain names of the colliding objects and, when available, bed coordinates in millimeters.
+        if (conflict->point)
+            text = format(_u8L("Extruder will crash into %1% while printing %2% near X=%3$.2f, Y=%4$.2f mm."),
+                       conflict->hit_object, conflict->printing_object, conflict->point->x(), conflict->point->y());
+        else
+            text = format(_u8L("Extruder will crash into %1% while printing %2%."),
+                       conflict->hit_object, conflict->printing_object);
         error = ErrorType::SLICING_ERROR;
         break;
     }
@@ -7496,6 +7511,28 @@ void GLCanvas3D::_set_warning_notification(EWarning warning, bool state)
             hypertext += std::string(" [") + mo->name + "]";
             notification_manager.push_notification(NotificationType::SlicingError, NotificationManager::NotificationLevel::ErrorNotificationLevel,
                 _u8L("ERROR:") + "\n" + text, hypertext, action_fn);
+        }
+        else
+            notification_manager.close_slicing_error_notification(text);
+
+        return;
+    }
+    if (warning == EWarning::SequentialCollision) {
+        auto conflict = m_gcode_viewer.get_sequential_collision_detected();
+        if (conflict.has_value() && conflict->point.has_value()) {
+            const Vec2d point = *conflict->point;
+            auto action_fn = [point](wxEvtHandler*) {
+                wxGetApp().CallAfter([point]() {
+                    wxGetApp().plater()->select_view_3D("Preview");
+                    if (GLCanvas3D* canvas = wxGetApp().plater()->get_current_canvas3D(); canvas != nullptr)
+                        canvas->show_sequential_collision_point(point);
+                });
+                return false;
+            };
+            char coords[128];
+            sprintf(coords, " [X=%.2f, Y=%.2f]", point.x(), point.y());
+            notification_manager.push_notification(NotificationType::SlicingError, NotificationManager::NotificationLevel::ErrorNotificationLevel,
+                _u8L("ERROR:") + "\n" + text, _u8L("Show crash point") + std::string(coords), action_fn);
         }
         else
             notification_manager.close_slicing_error_notification(text);

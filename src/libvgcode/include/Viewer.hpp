@@ -396,6 +396,8 @@ public:
     void set_cog_marker_scale_factor(float factor);
 
     const Vec3& get_tool_marker_position() const;
+    void set_tool_marker_position_override(const Vec3& position);
+    void clear_tool_marker_position_override();
 
     float get_tool_marker_offset_z() const;
     void set_tool_marker_offset_z(float offset_z);
