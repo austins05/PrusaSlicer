@@ -396,7 +396,9 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
     {
         auto sizer = create_sizer_with_btn(parent, &m_printhost_browse_btn, "browse", _L("Browse") + " " + dots);
         m_printhost_browse_btn->Bind(wxEVT_BUTTON, [=](wxCommandEvent& e) {
-            BonjourDialog dialog(this, Preset::printer_technology(m_printer.config));
+            const auto opt = m_config->option<ConfigOptionEnum<PrintHostType>>("host_type");
+            const std::string service = opt != nullptr && opt->value == htBambuLan ? "bambu" : "octoprint";
+            BonjourDialog dialog(this, Preset::printer_technology(m_printer.config), service);
             if (dialog.show_and_lookup()) {
                 m_optgroup->set_value("print_host", dialog.get_selected(), true);
                 m_optgroup->get_field("print_host")->field_changed();

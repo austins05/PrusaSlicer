@@ -26,7 +26,7 @@ public:
     wxString get_test_ok_msg() const override;
     wxString get_test_failed_msg(wxString &msg) const override;
     bool upload(PrintHostUpload upload_data, ProgressFn progress_fn, ErrorFn error_fn, InfoFn info_fn) const override;
-    bool has_auto_discovery() const override { return false; }
+    bool has_auto_discovery() const override { return true; }
     bool can_test() const override { return true; }
     PrintHostPostUploadActions get_post_upload_actions() const override { return PrintHostPostUploadAction::StartPrint; }
     std::string get_host() const override { return m_host; }
@@ -41,6 +41,8 @@ public:
     bool set_nozzle_temp(int temp, std::string &error) const;
     bool set_chamber_temp(int temp, std::string &error) const;
     bool set_print_speed(int speed_level, std::string &error) const;
+    bool set_camera_recording(bool enabled, std::string &error) const;
+    bool set_camera_timelapse(bool enabled, std::string &error) const;
     bool list_sdcard(std::vector<std::string> &files, std::string &error) const;
     bool delete_sdcard_file(const std::string &filename, std::string &error) const;
     bool start_sdcard_file(const std::string &filename, const std::string &print_options, std::string &error) const;

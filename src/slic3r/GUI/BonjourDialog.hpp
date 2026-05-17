@@ -31,7 +31,7 @@ class ReplySet;
 class BonjourDialog: public wxDialog
 {
 public:
-	BonjourDialog(wxWindow *parent, Slic3r::PrinterTechnology);
+	BonjourDialog(wxWindow *parent, Slic3r::PrinterTechnology, std::string service = "octoprint");
 	BonjourDialog(BonjourDialog &&) = delete;
 	BonjourDialog(const BonjourDialog &) = delete;
 	BonjourDialog &operator=(BonjourDialog &&) = delete;
@@ -48,6 +48,7 @@ private:
 	std::unique_ptr<wxTimer> timer;
 	unsigned timer_state;
 	Slic3r::PrinterTechnology tech;
+	std::string service;
 
 	virtual void on_reply(BonjourReplyEvent &);
 	void on_timer(wxTimerEvent &);

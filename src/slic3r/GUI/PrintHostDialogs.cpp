@@ -27,6 +27,7 @@
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/convert.hpp>
+#include <nlohmann/json.hpp>
 
 #include "GUI.hpp"
 #include "GUI_App.hpp"
@@ -353,6 +354,7 @@ public:
         button_sizer->Add(btn_stop, 0);
 
         m_status = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        m_summary = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 90), wxTE_MULTILINE | wxTE_READONLY);
         m_files = new wxListBox(this, wxID_ANY);
 
         auto *temp_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -385,6 +387,12 @@ public:
         speed_sizer->Add(m_speed, 0, wxRIGHT, 4);
         speed_sizer->Add(btn_speed, 0);
         speed_sizer->AddStretchSpacer();
+        m_camera_recording = new wxCheckBox(this, wxID_ANY, _L("Recording"));
+        m_camera_timelapse = new wxCheckBox(this, wxID_ANY, _L("Timelapse"));
+        auto *btn_camera = new wxButton(this, wxID_ANY, _L("Set Camera"));
+        speed_sizer->Add(m_camera_recording, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        speed_sizer->Add(m_camera_timelapse, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        speed_sizer->Add(btn_camera, 0);
 
         auto *gcode_sizer = new wxBoxSizer(wxHORIZONTAL);
         m_gcode = new wxTextCtrl(this, wxID_ANY);
@@ -402,6 +410,8 @@ public:
         topsizer->Add(temp_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(speed_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(gcode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Summary")), 0, wxLEFT | wxRIGHT, 10);
+        topsizer->Add(m_summary, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Status JSON")), 0, wxLEFT | wxRIGHT, 10);
         topsizer->Add(m_status, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         topsizer->Add(new wxStaticText(this, wxID_ANY, _L("SD card files")), 0, wxLEFT | wxRIGHT, 10);
@@ -432,6 +442,7 @@ public:
         btn_chamber_temp->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_chamber_temp(); });
         btn_speed->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_speed(); });
         btn_gcode->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_gcode(); });
+        btn_camera->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { set_camera(); });
     }
 
 private:
@@ -461,7 +472,62 @@ private:
             show_error_message(error);
             return;
         }
+        update_status_summary(status);
         m_status->SetValue(wxString::FromUTF8(status.c_str()));
+    }
+
+    static std::string json_string_or_number(const nlohmann::json &object, const char *key)
+    {
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null())
+            return {};
+        if (it->is_string())
+            return it->get<std::string>();
+        if (it->is_number_integer())
+            return std::to_string(it->get<long long>());
+        if (it->is_number_float())
+            return GUI::format("%1%", it->get<double>());
+        if (it->is_boolean())
+            return it->get<bool>() ? "true" : "false";
+        return {};
+    }
+
+    void update_status_summary(const std::string &status)
+    {
+        std::string summary;
+        const nlohmann::json parsed = nlohmann::json::parse(status, nullptr, false);
+        if (!parsed.is_discarded()) {
+            const nlohmann::json *print = nullptr;
+            if (parsed.contains("print") && parsed["print"].is_object())
+                print = &parsed["print"];
+            else if (parsed.is_object())
+                print = &parsed;
+
+            if (print != nullptr) {
+                const std::vector<std::pair<const char*, const char*>> fields = {
+                    { "State", "gcode_state" },
+                    { "Stage", "mc_print_stage" },
+                    { "Progress", "mc_percent" },
+                    { "File", "gcode_file" },
+                    { "Nozzle", "nozzle_temper" },
+                    { "Nozzle target", "nozzle_target_temper" },
+                    { "Bed", "bed_temper" },
+                    { "Bed target", "bed_target_temper" },
+                    { "Chamber", "chamber_temper" },
+                    { "Layer", "layer_num" },
+                    { "Total layers", "total_layer_num" },
+                    { "Remaining", "mc_remaining_time" }
+                };
+                for (const auto &[label, key] : fields) {
+                    const std::string value = json_string_or_number(*print, key);
+                    if (!value.empty())
+                        summary += GUI::format("%1%: %2%\n", label, value);
+                }
+            }
+        }
+        if (summary.empty())
+            summary = "Status received. No known summary fields found.";
+        m_summary->SetValue(wxString::FromUTF8(summary.c_str()));
     }
 
     void refresh_files()
@@ -528,6 +594,14 @@ private:
         run_control_command([this, &gcode](std::string &error) { return m_host->send_gcode_line(gcode, error); });
     }
 
+    void set_camera()
+    {
+        run_control_command([this](std::string &error) {
+            return m_host->set_camera_recording(m_camera_recording->GetValue(), error) &&
+                   m_host->set_camera_timelapse(m_camera_timelapse->GetValue(), error);
+        });
+    }
+
     void print_selected_file()
     {
         const std::string file = selected_file();
@@ -563,6 +637,7 @@ private:
     }
 
     std::unique_ptr<BambuLan> m_host;
+    wxTextCtrl *m_summary { nullptr };
     wxTextCtrl *m_status { nullptr };
     wxListBox *m_files { nullptr };
     wxSpinCtrl *m_nozzle_temp { nullptr };
@@ -570,6 +645,8 @@ private:
     wxSpinCtrl *m_chamber_temp { nullptr };
     wxChoice *m_speed { nullptr };
     wxTextCtrl *m_gcode { nullptr };
+    wxCheckBox *m_camera_recording { nullptr };
+    wxCheckBox *m_camera_timelapse { nullptr };
 };
 
 void show_bambu_lan_control_dialog(wxWindow *parent)

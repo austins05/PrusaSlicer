@@ -452,6 +452,17 @@ std::string mqtt_print_speed_payload(int speed_level)
     return payload.str();
 }
 
+std::string mqtt_camera_bool_payload(const std::string &command, bool enabled)
+{
+    std::ostringstream payload;
+    payload << "{\"camera\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"" << json_escape(command) << "\","
+            << "\"control\":" << bool_json(enabled)
+            << "}}";
+    return payload.str();
+}
+
 }
 
 BambuLan::BambuLan(DynamicPrintConfig *config)
@@ -781,6 +792,16 @@ bool BambuLan::set_print_speed(int speed_level, std::string &error) const
 {
     speed_level = std::clamp(speed_level, 1, 4);
     return mqtt_publish_json(mqtt_print_speed_payload(speed_level), error);
+}
+
+bool BambuLan::set_camera_recording(bool enabled, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_camera_bool_payload("ipcam_record_set", enabled), error);
+}
+
+bool BambuLan::set_camera_timelapse(bool enabled, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_camera_bool_payload("ipcam_timelapse", enabled), error);
 }
 
 bool BambuLan::request_status(std::string &status_json, std::string &error) const
