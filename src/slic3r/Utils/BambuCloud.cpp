@@ -257,6 +257,7 @@ bool BambuCloud::initialize(const std::string &country_code, std::string &error)
         }
 #endif
         if (!load_functions(error)) {
+            shutdown();
             m_error = error;
             return false;
         }
