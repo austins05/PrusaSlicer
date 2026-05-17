@@ -6,6 +6,7 @@
 #define slic3r_BambuLan_hpp_
 
 #include <string>
+#include <vector>
 
 #include "PrintHost.hpp"
 
@@ -32,11 +33,19 @@ public:
     std::string get_notification_host() const override { return "Bambu Lab LAN " + m_host; }
     std::string get_unusable_symbols() const override { return "\\/:*?\"<>|"; }
 
+    bool request_status(std::string &status_json, std::string &error) const;
+    bool send_print_command(const std::string &command, std::string &error) const;
+    bool send_pushing_command(const std::string &command, std::string &error) const;
+    bool list_sdcard(std::vector<std::string> &files, std::string &error) const;
+    bool delete_sdcard_file(const std::string &filename, std::string &error) const;
+    bool start_sdcard_file(const std::string &filename, const std::string &print_options, std::string &error) const;
+
 private:
     bool ftps_test(std::string &error) const;
     bool ftps_upload(const boost::filesystem::path &source_path, const std::string &remote_filename, ProgressFn progress_fn, std::string &error) const;
     bool make_bambu_project_archive(const boost::filesystem::path &source_path, boost::filesystem::path &archive_path, std::string &error) const;
     bool mqtt_start_print(const std::string &remote_filename, const std::string &print_options, std::string &error) const;
+    bool mqtt_publish_json(const std::string &payload, std::string &error) const;
 
     std::string m_host;
     std::string m_access_code;

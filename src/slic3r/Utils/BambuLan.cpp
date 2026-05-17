@@ -22,6 +22,11 @@
 #include <curl/curl.h>
 #include <wx/string.h>
 
+#ifdef __linux__
+#include <sys/socket.h>
+#include <sys/time.h>
+#endif
+
 #include "libslic3r/PrintConfig.hpp"
 #include "miniz.h"
 
@@ -195,6 +200,13 @@ size_t discard_write_cb(char *ptr, size_t size, size_t nmemb, void *)
     return size * nmemb;
 }
 
+size_t string_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    std::string *out = static_cast<std::string*>(userdata);
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
 struct CurlProgressContext
 {
     Http::ProgressFn progress_fn;
@@ -302,6 +314,48 @@ std::vector<unsigned char> mqtt_publish_packet(const std::string &topic, const s
     return packet;
 }
 
+std::vector<unsigned char> mqtt_subscribe_packet(const std::string &topic)
+{
+    std::vector<unsigned char> variable;
+    mqtt_append_u16(variable, 1);
+    mqtt_append_utf8(variable, topic);
+    variable.push_back(0);
+
+    std::vector<unsigned char> packet;
+    packet.push_back(0x82);
+    mqtt_append_remaining_length(packet, variable.size());
+    packet.insert(packet.end(), variable.begin(), variable.end());
+    return packet;
+}
+
+bool mqtt_read_remaining_length(boost::asio::ssl::stream<boost::asio::ip::tcp::socket> &stream, size_t &length)
+{
+    length = 0;
+    size_t multiplier = 1;
+    for (int i = 0; i < 4; ++i) {
+        unsigned char encoded = 0;
+        boost::asio::read(stream, boost::asio::buffer(&encoded, 1));
+        length += (encoded & 127) * multiplier;
+        if ((encoded & 128) == 0)
+            return true;
+        multiplier *= 128;
+    }
+    return false;
+}
+
+void set_mqtt_read_timeout(boost::asio::ip::tcp::socket &socket, int seconds)
+{
+#ifdef __linux__
+    timeval timeout {};
+    timeout.tv_sec = seconds;
+    timeout.tv_usec = 0;
+    setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#else
+    (void)socket;
+    (void)seconds;
+#endif
+}
+
 std::string bool_json(bool value)
 {
     return value ? "true" : "false";
@@ -329,6 +383,26 @@ std::string mqtt_start_payload(const std::string &remote_filename, const BambuSt
     if (!options.ams_mapping.empty())
         payload << ",\"ams_mapping\":" << options.ams_mapping;
     payload
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_print_command_payload(const std::string &command)
+{
+    std::ostringstream payload;
+    payload << "{\"print\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"" << json_escape(command) << "\""
+            << "}}";
+    return payload.str();
+}
+
+std::string mqtt_pushing_command_payload(const std::string &command)
+{
+    std::ostringstream payload;
+    payload << "{\"pushing\":{"
+            << "\"sequence_id\":\"0\","
+            << "\"command\":\"" << json_escape(command) << "\""
             << "}}";
     return payload.str();
 }
@@ -453,6 +527,93 @@ bool BambuLan::ftps_upload(const fs::path &source_path, const std::string &remot
     return true;
 }
 
+bool BambuLan::list_sdcard(std::vector<std::string> &files, std::string &error) const
+{
+    files.clear();
+
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        error = "Could not initialize libcurl.";
+        return false;
+    }
+
+    char error_buffer[CURL_ERROR_SIZE] = {};
+    std::string listing;
+    const std::string url = "ftps://" + m_host + ":" + std::to_string(BAMBU_FTPS_PORT) + "/sdcard/";
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, BAMBU_LAN_USER);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, m_access_code.c_str());
+    curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, string_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &listing);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    const CURLcode code = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    if (code != CURLE_OK) {
+        error = curl_error(code, error_buffer);
+        return false;
+    }
+
+    std::istringstream lines(listing);
+    std::string line;
+    while (std::getline(lines, line)) {
+        line = trim_copy(line);
+        if (line.empty())
+            continue;
+        const size_t split = line.find_last_of(" \t");
+        if (split != std::string::npos)
+            line = trim_copy(line.substr(split + 1));
+        if (!line.empty() && line != "." && line != "..")
+            files.push_back(line);
+    }
+    return true;
+}
+
+bool BambuLan::delete_sdcard_file(const std::string &filename, std::string &error) const
+{
+    const std::string sanitized = sanitize_remote_filename(filename);
+    if (sanitized.empty()) {
+        error = "Filename is empty.";
+        return false;
+    }
+
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        error = "Could not initialize libcurl.";
+        return false;
+    }
+
+    char error_buffer[CURL_ERROR_SIZE] = {};
+    const std::string url = "ftps://" + m_host + ":" + std::to_string(BAMBU_FTPS_PORT) + "/sdcard/" + curl_escape_path_element(curl, sanitized);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, BAMBU_LAN_USER);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, m_access_code.c_str());
+    curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELE");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write_cb);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    const CURLcode code = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    if (code != CURLE_OK) {
+        error = curl_error(code, error_buffer);
+        return false;
+    }
+    return true;
+}
+
 bool BambuLan::make_bambu_project_archive(const fs::path &source_path, fs::path &archive_path, std::string &error) const
 {
     archive_path = fs::temp_directory_path() / fs::unique_path(".PrusaSlicer.bambu.%%%%-%%%%-%%%%-%%%%.gcode.3mf");
@@ -481,14 +642,12 @@ bool BambuLan::make_bambu_project_archive(const fs::path &source_path, fs::path 
     return true;
 }
 
-bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::string &print_options, std::string &error) const
+bool BambuLan::mqtt_publish_json(const std::string &payload, std::string &error) const
 {
     if (m_serial.empty()) {
-        error = "Printer serial/device ID is empty. Put the X1C serial number in the Username field to start prints over LAN.";
+        error = "Printer serial/device ID is empty. Put the X1C serial number in the Username field.";
         return false;
     }
-
-    const BambuStartOptions start_options = parse_bambu_start_options(print_options);
 
     try {
         namespace asio = boost::asio;
@@ -501,6 +660,7 @@ bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::s
         tcp::resolver resolver(io);
         boost::asio::ssl::stream<tcp::socket> stream(io, ssl_context);
         asio::connect(stream.next_layer(), resolver.resolve(m_host, std::to_string(BAMBU_MQTT_PORT)));
+        set_mqtt_read_timeout(stream.next_layer(), 8);
         stream.handshake(asio::ssl::stream_base::client);
 
         const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -516,7 +676,6 @@ bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::s
         }
 
         const std::string topic = "device/" + m_serial + "/request";
-        const std::string payload = mqtt_start_payload(remote_filename, start_options);
         const std::vector<unsigned char> publish = mqtt_publish_packet(topic, payload);
         asio::write(stream, asio::buffer(publish));
 
@@ -525,6 +684,113 @@ bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::s
         boost::system::error_code ignored;
         stream.shutdown(ignored);
         stream.next_layer().close(ignored);
+        return true;
+    } catch (const std::exception &e) {
+        error = e.what();
+        return false;
+    }
+}
+
+bool BambuLan::mqtt_start_print(const std::string &remote_filename, const std::string &print_options, std::string &error) const
+{
+    const BambuStartOptions start_options = parse_bambu_start_options(print_options);
+    return mqtt_publish_json(mqtt_start_payload(remote_filename, start_options), error);
+}
+
+bool BambuLan::start_sdcard_file(const std::string &filename, const std::string &print_options, std::string &error) const
+{
+    return mqtt_start_print(sanitize_remote_filename(filename), print_options, error);
+}
+
+bool BambuLan::send_print_command(const std::string &command, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_print_command_payload(command), error);
+}
+
+bool BambuLan::send_pushing_command(const std::string &command, std::string &error) const
+{
+    return mqtt_publish_json(mqtt_pushing_command_payload(command), error);
+}
+
+bool BambuLan::request_status(std::string &status_json, std::string &error) const
+{
+    status_json.clear();
+    if (m_serial.empty()) {
+        error = "Printer serial/device ID is empty. Put the X1C serial number in the Username field.";
+        return false;
+    }
+
+    try {
+        namespace asio = boost::asio;
+        using asio::ip::tcp;
+
+        asio::io_context io;
+        asio::ssl::context ssl_context(asio::ssl::context::tls_client);
+        ssl_context.set_verify_mode(asio::ssl::verify_none);
+
+        tcp::resolver resolver(io);
+        boost::asio::ssl::stream<tcp::socket> stream(io, ssl_context);
+        asio::connect(stream.next_layer(), resolver.resolve(m_host, std::to_string(BAMBU_MQTT_PORT)));
+        set_mqtt_read_timeout(stream.next_layer(), 8);
+        stream.handshake(asio::ssl::stream_base::client);
+
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const std::string client_id = "prusaslicer-status-" + std::to_string(now);
+        const std::vector<unsigned char> connect = mqtt_connect_packet(client_id, m_access_code);
+        asio::write(stream, asio::buffer(connect));
+
+        unsigned char connack[4] = {};
+        asio::read(stream, asio::buffer(connack));
+        if (connack[0] != 0x20 || connack[1] != 0x02 || connack[3] != 0x00) {
+            error = "Bambu MQTT login failed.";
+            return false;
+        }
+
+        const std::string report_topic = "device/" + m_serial + "/report";
+        asio::write(stream, asio::buffer(mqtt_subscribe_packet(report_topic)));
+        asio::write(stream, asio::buffer(mqtt_publish_packet("device/" + m_serial + "/request", mqtt_pushing_command_payload("pushall"))));
+
+        for (int packet_index = 0; packet_index < 20; ++packet_index) {
+            unsigned char header = 0;
+            boost::system::error_code ec;
+            asio::read(stream, asio::buffer(&header, 1), ec);
+            if (ec) {
+                error = ec.message();
+                return false;
+            }
+
+            size_t remaining_length = 0;
+            if (!mqtt_read_remaining_length(stream, remaining_length)) {
+                error = "Invalid MQTT packet length.";
+                return false;
+            }
+            std::vector<unsigned char> body(remaining_length);
+            if (!body.empty())
+                asio::read(stream, asio::buffer(body));
+
+            if ((header & 0xf0) != 0x30 || body.size() < 2)
+                continue;
+
+            const size_t topic_len = (size_t(body[0]) << 8) | size_t(body[1]);
+            if (body.size() < 2 + topic_len)
+                continue;
+            const std::string topic(reinterpret_cast<const char*>(body.data() + 2), topic_len);
+            if (topic != report_topic)
+                continue;
+            status_json.assign(reinterpret_cast<const char*>(body.data() + 2 + topic_len), body.size() - 2 - topic_len);
+            break;
+        }
+
+        const unsigned char disconnect[] = { 0xe0, 0x00 };
+        boost::system::error_code ignored;
+        asio::write(stream, asio::buffer(disconnect), ignored);
+        stream.shutdown(ignored);
+        stream.next_layer().close(ignored);
+
+        if (status_json.empty()) {
+            error = "No status report received from printer.";
+            return false;
+        }
         return true;
     } catch (const std::exception &e) {
         error = e.what();

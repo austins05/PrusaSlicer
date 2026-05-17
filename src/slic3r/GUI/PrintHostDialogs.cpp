@@ -16,6 +16,7 @@
 #include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/button.h>
+#include <wx/listbox.h>
 #include <wx/dataview.h>
 #include <wx/wupdlock.h>
 #include <wx/debug.h>
@@ -32,9 +33,11 @@
 #include "I18N.hpp"
 #include "MainFrame.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/PresetBundle.hpp"
 #include "NotificationManager.hpp"
 #include "ExtraRenderers.hpp"
 #include "format.hpp"
+#include "../Utils/BambuLan.hpp"
 
 namespace fs = boost::filesystem;
 
@@ -324,6 +327,180 @@ wxDEFINE_EVENT(EVT_PRINTHOST_PROGRESS, PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_ERROR,    PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_CANCEL,   PrintHostQueueDialog::Event);
 wxDEFINE_EVENT(EVT_PRINTHOST_INFO,  PrintHostQueueDialog::Event);
+
+class BambuLanControlDialog : public DPIDialog
+{
+public:
+    BambuLanControlDialog(wxWindow *parent, DynamicPrintConfig *config)
+        : DPIDialog(parent, wxID_ANY, _L("Bambu Lab LAN Control"), wxDefaultPosition, wxSize(760, 560), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        , m_host(std::make_unique<BambuLan>(config))
+    {
+        auto *topsizer = new wxBoxSizer(wxVERTICAL);
+
+        auto *button_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_refresh_status = new wxButton(this, wxID_ANY, _L("Refresh Status"));
+        auto *btn_refresh_files = new wxButton(this, wxID_ANY, _L("Refresh Files"));
+        auto *btn_pause = new wxButton(this, wxID_ANY, _L("Pause"));
+        auto *btn_resume = new wxButton(this, wxID_ANY, _L("Resume"));
+        auto *btn_stop = new wxButton(this, wxID_ANY, _L("Stop"));
+        button_sizer->Add(btn_refresh_status, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_refresh_files, 0, wxRIGHT, 6);
+        button_sizer->AddStretchSpacer();
+        button_sizer->Add(btn_pause, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_resume, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_stop, 0);
+
+        m_status = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        m_files = new wxListBox(this, wxID_ANY);
+
+        auto *file_button_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_print_file = new wxButton(this, wxID_ANY, _L("Print Selected File"));
+        auto *btn_delete_file = new wxButton(this, wxID_ANY, _L("Delete Selected File"));
+        file_button_sizer->Add(btn_print_file, 0, wxRIGHT, 6);
+        file_button_sizer->Add(btn_delete_file, 0);
+
+        topsizer->Add(button_sizer, 0, wxEXPAND | wxALL, 10);
+        topsizer->Add(new wxStaticText(this, wxID_ANY, _L("Status JSON")), 0, wxLEFT | wxRIGHT, 10);
+        topsizer->Add(m_status, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(new wxStaticText(this, wxID_ANY, _L("SD card files")), 0, wxLEFT | wxRIGHT, 10);
+        topsizer->Add(m_files, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        topsizer->Add(file_button_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+        auto *close_sizer = new wxBoxSizer(wxHORIZONTAL);
+        close_sizer->AddStretchSpacer();
+        close_sizer->Add(new wxButton(this, wxID_CANCEL, _L("Close")));
+        topsizer->Add(close_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+        SetSizer(topsizer);
+        Layout();
+        CentreOnParent();
+
+        btn_refresh_status->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { refresh_status(); });
+        btn_refresh_files->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { refresh_files(); });
+        btn_pause->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_print_command("pause"); });
+        btn_resume->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_print_command("resume"); });
+        btn_stop->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (wxMessageBox(_L("Stop the active print?"), _L("Bambu Lab LAN Control"), wxYES_NO | wxICON_WARNING, this) == wxYES)
+                send_print_command("stop");
+        });
+        btn_print_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { print_selected_file(); });
+        btn_delete_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { delete_selected_file(); });
+    }
+
+private:
+    void on_dpi_changed(const wxRect &suggested_rect) override
+    {
+        SetSize(suggested_rect.GetSize());
+        Layout();
+    }
+
+    void show_error_message(const std::string &error)
+    {
+        show_error(this, wxString::FromUTF8(error.c_str()));
+    }
+
+    std::string selected_file() const
+    {
+        const int selection = m_files->GetSelection();
+        return selection == wxNOT_FOUND ? std::string() : into_u8(m_files->GetString(selection));
+    }
+
+    void refresh_status()
+    {
+        wxBusyCursor wait;
+        std::string status;
+        std::string error;
+        if (!m_host->request_status(status, error)) {
+            show_error_message(error);
+            return;
+        }
+        m_status->SetValue(wxString::FromUTF8(status.c_str()));
+    }
+
+    void refresh_files()
+    {
+        wxBusyCursor wait;
+        std::vector<std::string> files;
+        std::string error;
+        if (!m_host->list_sdcard(files, error)) {
+            show_error_message(error);
+            return;
+        }
+        m_files->Clear();
+        for (const std::string &file : files)
+            m_files->Append(wxString::FromUTF8(file.c_str()));
+    }
+
+    void send_print_command(const std::string &command)
+    {
+        wxBusyCursor wait;
+        std::string error;
+        if (!m_host->send_print_command(command, error)) {
+            show_error_message(error);
+            return;
+        }
+        refresh_status();
+    }
+
+    void print_selected_file()
+    {
+        const std::string file = selected_file();
+        if (file.empty())
+            return;
+        if (wxMessageBox(wxString::Format(_L("Start printing %s?"), wxString::FromUTF8(file.c_str())), _L("Bambu Lab LAN Control"), wxYES_NO | wxICON_QUESTION, this) != wxYES)
+            return;
+
+        wxBusyCursor wait;
+        std::string error;
+        if (!m_host->start_sdcard_file(file, std::string(), error)) {
+            show_error_message(error);
+            return;
+        }
+        refresh_status();
+    }
+
+    void delete_selected_file()
+    {
+        const std::string file = selected_file();
+        if (file.empty())
+            return;
+        if (wxMessageBox(wxString::Format(_L("Delete %s from the printer SD card?"), wxString::FromUTF8(file.c_str())), _L("Bambu Lab LAN Control"), wxYES_NO | wxICON_WARNING, this) != wxYES)
+            return;
+
+        wxBusyCursor wait;
+        std::string error;
+        if (!m_host->delete_sdcard_file(file, error)) {
+            show_error_message(error);
+            return;
+        }
+        refresh_files();
+    }
+
+    std::unique_ptr<BambuLan> m_host;
+    wxTextCtrl *m_status { nullptr };
+    wxListBox *m_files { nullptr };
+};
+
+void show_bambu_lan_control_dialog(wxWindow *parent)
+{
+    DynamicPrintConfig *config = wxGetApp().preset_bundle->physical_printers.get_selected_printer_config();
+    if (config == nullptr) {
+        show_error(parent, _L("Select a physical printer configured as Bambu Lab LAN first."));
+        return;
+    }
+    const auto *host_type = config->option<ConfigOptionEnum<PrintHostType>>("host_type");
+    if (host_type == nullptr || host_type->value != htBambuLan) {
+        show_error(parent, _L("The selected physical printer is not configured as Bambu Lab LAN."));
+        return;
+    }
+    if (config->opt_string("print_host").empty() || config->opt_string("printhost_apikey").empty() || config->opt_string("printhost_user").empty()) {
+        show_error(parent, _L("Bambu Lab LAN control requires Hostname/IP, API key/LAN access code, and Username/serial number."));
+        return;
+    }
+
+    BambuLanControlDialog dlg(parent, config);
+    dlg.ShowModal();
+}
 
 PrintHostQueueDialog::Event::Event(wxEventType eventType, int winid, size_t job_id)
     : wxEvent(winid, eventType)

@@ -122,11 +122,13 @@ When sending to a Bambu Lab LAN host, the upload dialog exposes Bambu print-star
 - Build plate type
 - Bed leveling, flow calibration, vibration calibration, first layer inspection, and timelapse toggles
 
+The Window menu also includes `Bambu Lab LAN Control` for the selected physical printer. It can request the printer status report over MQTT, pause/resume/stop an active print, list SD-card files over FTPS, start a selected SD-card file, and delete selected SD-card files.
+
 Current limitations:
 
 - This is local LAN support only, not Bambu cloud login or device-account sync.
 - AMS support is a local print-start mapping field, not the full Orca/Bambu Studio spool sync and AMS material matching UI.
-- Printer live status, camera, HMS/errors, and file browser panels are not implemented yet.
+- Camera streaming, HMS/error explanation panels, cloud account binding, remote device sync, and full AMS material matching panels are not implemented yet.
 
 ## Current Notes
 

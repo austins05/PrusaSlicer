@@ -1708,6 +1708,8 @@ void MainFrame::init_menubar_as_editor()
         windowMenu->AppendSeparator();
         append_menu_item(windowMenu, wxID_ANY, _L("Print &Host Upload Queue") + "\tCtrl+J", _L("Display the Print Host Upload Queue window"),
             [this](wxCommandEvent&) { m_printhost_queue_dlg->Show(); }, "upload_queue", nullptr, []() {return true; }, this);
+        append_menu_item(windowMenu, wxID_ANY, _L("Bambu Lab LAN Control"), _L("Open local Bambu Lab printer status and controls"),
+            [this](wxCommandEvent&) { show_bambu_lan_control_dialog(this); }, "printer", nullptr, []() { return true; }, this);
         
         windowMenu->AppendSeparator();
         append_menu_item(windowMenu, wxID_ANY, _L("Open New Instance") + "\tCtrl+Shift+I", _L("Open a new PrusaSlicer instance"),
