@@ -24,6 +24,7 @@
 #include <wx/dataview.h>
 #include <wx/wupdlock.h>
 #include <wx/debug.h>
+#include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 #include <wx/utils.h>
 #include <wx/webview.h>
@@ -654,6 +655,67 @@ std::string first_json_string(const nlohmann::json &object, const std::initializ
     return {};
 }
 
+bool cloud_json_u32(const nlohmann::json &object, const char *key, uint32_t &out)
+{
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null())
+        return false;
+    if (it->is_number_unsigned()) {
+        out = static_cast<uint32_t>(it->get<uint64_t>());
+        return true;
+    }
+    if (it->is_number_integer()) {
+        const auto value = it->get<int64_t>();
+        if (value < 0)
+            return false;
+        out = static_cast<uint32_t>(value);
+        return true;
+    }
+    if (it->is_string()) {
+        try {
+            size_t parsed_chars = 0;
+            const unsigned long value = std::stoul(it->get<std::string>(), &parsed_chars, 0);
+            if (parsed_chars == it->get<std::string>().size()) {
+                out = static_cast<uint32_t>(value);
+                return true;
+            }
+        } catch (...) {
+        }
+    }
+    return false;
+}
+
+std::string cloud_hms_line(uint32_t attr, uint32_t code)
+{
+    const uint32_t module = (attr >> 24) & 0xff;
+    const uint32_t module_num = (attr >> 16) & 0xff;
+    const uint32_t part_id = (attr >> 8) & 0xff;
+    const uint32_t level = (code >> 16) & 0x0f;
+    const uint32_t msg_code = code & 0xffff;
+    std::ostringstream long_code;
+    long_code << std::uppercase << std::hex << std::setfill('0')
+        << std::setw(2) << module
+        << std::setw(2) << module_num
+        << std::setw(2) << part_id
+        << "00000"
+        << std::setw(1) << level
+        << std::setw(4) << msg_code;
+
+    const char *level_name = "Unknown";
+    if (level == 1) level_name = "Fatal";
+    else if (level == 2) level_name = "Serious";
+    else if (level == 3) level_name = "Common";
+    else if (level == 4) level_name = "Info";
+
+    std::ostringstream out;
+    out << level_name << " " << long_code.str() << " (module 0x"
+        << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << module
+        << ", unit " << std::dec << module_num
+        << ", part " << part_id
+        << ", message 0x" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << msg_code << ")";
+    return out.str();
+}
+
 } // namespace
 
 class BambuCloudDevicesDialog : public DPIDialog
@@ -661,6 +723,7 @@ class BambuCloudDevicesDialog : public DPIDialog
 public:
     BambuCloudDevicesDialog(wxWindow *parent)
         : DPIDialog(parent, wxID_ANY, _L("Bambu Cloud Devices"), wxDefaultPosition, wxSize(900, 680), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        , m_alive(std::make_shared<bool>(true))
     {
         auto *topsizer = new wxBoxSizer(wxVERTICAL);
         auto *button_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -670,15 +733,60 @@ public:
         auto *btn_firmware = new wxButton(this, wxID_ANY, _L("Firmware"));
         auto *btn_subscribe = new wxButton(this, wxID_ANY, _L("Subscribe"));
         auto *btn_pushall = new wxButton(this, wxID_ANY, _L("Request Push All"));
+        auto *btn_camera_url = new wxButton(this, wxID_ANY, _L("Camera URL"));
+        auto *btn_cloud_print = new wxButton(this, wxID_ANY, _L("Cloud Print File"));
         button_sizer->Add(btn_init, 0, wxRIGHT, 6);
         button_sizer->Add(btn_refresh, 0, wxRIGHT, 6);
         button_sizer->Add(btn_bind, 0, wxRIGHT, 6);
         button_sizer->Add(btn_firmware, 0, wxRIGHT, 6);
         button_sizer->Add(btn_subscribe, 0, wxRIGHT, 6);
         button_sizer->Add(btn_pushall, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_camera_url, 0, wxRIGHT, 6);
+        button_sizer->Add(btn_cloud_print, 0, wxRIGHT, 6);
         button_sizer->AddStretchSpacer();
         button_sizer->Add(new wxButton(this, wxID_CANCEL, _L("Close")), 0);
         topsizer->Add(button_sizer, 0, wxEXPAND | wxALL, 10);
+
+        auto *control_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_pause = new wxButton(this, wxID_ANY, _L("Pause"));
+        auto *btn_resume = new wxButton(this, wxID_ANY, _L("Resume"));
+        auto *btn_stop = new wxButton(this, wxID_ANY, _L("Stop"));
+        m_cloud_nozzle_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(78, -1), wxSP_ARROW_KEYS, 0, 360, 220);
+        m_cloud_bed_temp = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(78, -1), wxSP_ARROW_KEYS, 0, 120, 60);
+        auto *btn_nozzle = new wxButton(this, wxID_ANY, _L("Set Nozzle"));
+        auto *btn_bed = new wxButton(this, wxID_ANY, _L("Set Bed"));
+        wxArrayString speeds;
+        speeds.Add(_L("Silent"));
+        speeds.Add(_L("Standard"));
+        speeds.Add(_L("Sport"));
+        speeds.Add(_L("Ludicrous"));
+        m_cloud_speed = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, speeds);
+        m_cloud_speed->SetSelection(1);
+        auto *btn_speed = new wxButton(this, wxID_ANY, _L("Set Speed"));
+        control_sizer->Add(btn_pause, 0, wxRIGHT, 4);
+        control_sizer->Add(btn_resume, 0, wxRIGHT, 4);
+        control_sizer->Add(btn_stop, 0, wxRIGHT, 10);
+        control_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Nozzle")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        control_sizer->Add(m_cloud_nozzle_temp, 0, wxRIGHT, 4);
+        control_sizer->Add(btn_nozzle, 0, wxRIGHT, 10);
+        control_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Bed")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        control_sizer->Add(m_cloud_bed_temp, 0, wxRIGHT, 4);
+        control_sizer->Add(btn_bed, 0, wxRIGHT, 10);
+        control_sizer->Add(new wxStaticText(this, wxID_ANY, _L("Speed")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        control_sizer->Add(m_cloud_speed, 0, wxRIGHT, 4);
+        control_sizer->Add(btn_speed, 0);
+        topsizer->Add(control_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+        auto *gcode_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_cloud_gcode = new wxTextCtrl(this, wxID_ANY);
+        auto *btn_gcode = new wxButton(this, wxID_ANY, _L("Send G-code"));
+        auto *btn_hms_ignore = new wxButton(this, wxID_ANY, _L("Ignore HMS"));
+        auto *btn_clean_error = new wxButton(this, wxID_ANY, _L("Clean Error"));
+        gcode_sizer->Add(m_cloud_gcode, 1, wxRIGHT, 4);
+        gcode_sizer->Add(btn_gcode, 0, wxRIGHT, 4);
+        gcode_sizer->Add(btn_hms_ignore, 0, wxRIGHT, 4);
+        gcode_sizer->Add(btn_clean_error, 0);
+        topsizer->Add(gcode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
 
         m_tabs = new wxNotebook(this, wxID_ANY);
         auto *devices_panel = new wxPanel(m_tabs);
@@ -705,6 +813,19 @@ public:
         raw_panel->SetSizer(raw_sizer);
 
         m_tabs->AddPage(devices_panel, _L("Devices"));
+        auto *live_panel = new wxPanel(m_tabs);
+        auto *live_sizer = new wxBoxSizer(wxVERTICAL);
+        m_live_summary = new wxTextCtrl(live_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 130), wxTE_MULTILINE | wxTE_READONLY);
+        m_live_hms = new wxTextCtrl(live_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, 105), wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        m_live_raw = new wxTextCtrl(live_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+        live_sizer->Add(new wxStaticText(live_panel, wxID_ANY, _L("Live summary")), 0, wxLEFT | wxRIGHT | wxTOP, 8);
+        live_sizer->Add(m_live_summary, 0, wxEXPAND | wxALL, 8);
+        live_sizer->Add(new wxStaticText(live_panel, wxID_ANY, _L("HMS")), 0, wxLEFT | wxRIGHT, 8);
+        live_sizer->Add(m_live_hms, 0, wxEXPAND | wxALL, 8);
+        live_sizer->Add(new wxStaticText(live_panel, wxID_ANY, _L("Live JSON")), 0, wxLEFT | wxRIGHT, 8);
+        live_sizer->Add(m_live_raw, 1, wxEXPAND | wxALL, 8);
+        live_panel->SetSizer(live_sizer);
+        m_tabs->AddPage(live_panel, _L("Live Status"));
         m_tabs->AddPage(detail_panel, _L("Details"));
         m_tabs->AddPage(raw_panel, _L("Raw JSON"));
         topsizer->Add(m_tabs, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -719,10 +840,29 @@ public:
         btn_firmware->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { query_firmware(); });
         btn_subscribe->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { subscribe_selected(); });
         btn_pushall->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { request_push_all(); });
+        btn_camera_url->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { query_camera_url(); });
+        btn_cloud_print->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { cloud_print_file(); });
+        btn_pause->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_print_command("pause"); });
+        btn_resume->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_print_command("resume"); });
+        btn_stop->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_print_command("stop"); });
+        btn_nozzle->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_cloud_payload(print_int_payload("set_nozzle_temper", "target_temp", m_cloud_nozzle_temp->GetValue())); });
+        btn_bed->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_cloud_payload(print_int_payload("set_bed_temp", "temp", m_cloud_bed_temp->GetValue())); });
+        btn_speed->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_cloud_payload(print_speed_payload(m_cloud_speed->GetSelection() + 1)); });
+        btn_gcode->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_gcode(); });
+        btn_hms_ignore->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { send_hms_action("ignore"); });
+        btn_clean_error->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { clean_print_error(); });
         m_devices->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent&) { update_selected_detail(); });
 
         initialize_cloud(false);
         refresh_devices();
+    }
+
+    ~BambuCloudDevicesDialog() override
+    {
+        if (m_alive)
+            *m_alive = false;
+        std::string ignored;
+        BambuCloud::instance().set_message_callback(nullptr, ignored);
     }
 
 private:
@@ -746,7 +886,22 @@ private:
                 show_error(this, wxString::FromUTF8(error.c_str()));
             return false;
         }
+        register_live_callback();
         return true;
+    }
+
+    void register_live_callback()
+    {
+        std::string error;
+        const std::weak_ptr<bool> alive = m_alive;
+        BambuCloud::instance().set_message_callback([this, alive](std::string dev_id, std::string msg) {
+            wxGetApp().CallAfter([this, alive, dev_id = std::move(dev_id), msg = std::move(msg)]() {
+                const auto locked = alive.lock();
+                if (!locked || !*locked)
+                    return;
+                on_cloud_message(dev_id, msg);
+            });
+        }, error);
     }
 
     int selected_index() const
@@ -808,6 +963,93 @@ private:
         m_details->SetValue(wxString::FromUTF8(m_device_json[idx].dump(2).c_str()));
     }
 
+    static std::string print_command_payload(const std::string &command)
+    {
+        nlohmann::json j;
+        j["print"]["command"] = command;
+        j["print"]["sequence_id"] = "0";
+        return j.dump();
+    }
+
+    static std::string print_int_payload(const std::string &command, const std::string &key, int value)
+    {
+        nlohmann::json j;
+        j["print"]["command"] = command;
+        j["print"][key] = value;
+        j["print"]["sequence_id"] = "0";
+        return j.dump();
+    }
+
+    static std::string print_speed_payload(int speed_level)
+    {
+        nlohmann::json j;
+        j["print"]["command"] = "print_speed";
+        j["print"]["param"] = std::to_string(speed_level);
+        j["print"]["sequence_id"] = "0";
+        return j.dump();
+    }
+
+    void send_cloud_payload(const std::string &payload)
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        std::string error;
+        if (!BambuCloud::instance().send_cloud_message(dev_id, payload, 1, 0, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8(("Sent cloud command to " + dev_id + "\n\n" + payload).c_str()));
+        m_tabs->SetSelection(3);
+    }
+
+    void send_print_command(const std::string &command)
+    {
+        if (command == "stop" &&
+            wxMessageBox(_L("Stop the active cloud print?"), _L("Bambu Cloud Devices"), wxYES_NO | wxICON_WARNING, this) != wxYES)
+            return;
+        send_cloud_payload(print_command_payload(command));
+    }
+
+    void send_gcode()
+    {
+        const std::string gcode = into_u8(m_cloud_gcode->GetValue());
+        if (gcode.empty())
+            return;
+        nlohmann::json j;
+        j["print"]["command"] = "gcode_line";
+        j["print"]["param"] = gcode;
+        j["print"]["sequence_id"] = "0";
+        send_cloud_payload(j.dump());
+    }
+
+    void send_hms_action(const std::string &action)
+    {
+        if (m_last_hms_code.empty()) {
+            show_error(this, _L("No HMS code is available from the current live status."));
+            return;
+        }
+        nlohmann::json j;
+        j["print"]["command"] = action;
+        j["print"]["param"] = m_last_hms_code;
+        if (!m_last_job_id.empty())
+            j["print"]["job_id"] = m_last_job_id;
+        j["print"]["sequence_id"] = "0";
+        send_cloud_payload(j.dump());
+    }
+
+    void clean_print_error()
+    {
+        nlohmann::json j;
+        j["print"]["command"] = "clean_print_error";
+        if (!m_last_subtask_id.empty())
+            j["print"]["subtask_id"] = m_last_subtask_id;
+        if (!m_last_print_error.empty())
+            j["print"]["print_error"] = m_last_print_error;
+        j["print"]["sequence_id"] = "0";
+        send_cloud_payload(j.dump());
+    }
+
     void query_bind_status()
     {
         const std::string dev_id = selected_device_id();
@@ -822,7 +1064,25 @@ private:
             return;
         }
         m_raw->SetValue(wxString::FromUTF8((GUI::format("Bind status HTTP: %1%\n\n%2%", http_code, body)).c_str()));
-        m_tabs->SetSelection(2);
+        m_tabs->SetSelection(3);
+    }
+
+    void query_camera_url()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        wxBusyCursor wait;
+        std::string url;
+        std::string error;
+        if (!BambuCloud::instance().get_camera_url(dev_id, url, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8(("Camera URL for " + dev_id + "\n\n" + url).c_str()));
+        m_tabs->SetSelection(3);
+        if (!url.empty() && wxMessageBox(_L("Open the camera URL in a browser?"), _L("Bambu Cloud Devices"), wxYES_NO | wxICON_QUESTION, this) == wxYES)
+            wxLaunchDefaultBrowser(wxString::FromUTF8(url.c_str()), wxBROWSER_NEW_WINDOW);
     }
 
     void query_firmware()
@@ -839,7 +1099,7 @@ private:
             return;
         }
         m_raw->SetValue(wxString::FromUTF8((GUI::format("Firmware HTTP: %1%\n\n%2%", http_code, body)).c_str()));
-        m_tabs->SetSelection(2);
+        m_tabs->SetSelection(3);
     }
 
     void subscribe_selected()
@@ -855,7 +1115,7 @@ private:
             return;
         }
         m_raw->SetValue(wxString::FromUTF8(("Subscribed to printer updates for " + dev_id).c_str()));
-        m_tabs->SetSelection(2);
+        m_tabs->SetSelection(3);
     }
 
     void request_push_all()
@@ -870,15 +1130,140 @@ private:
             return;
         }
         m_raw->SetValue(wxString::FromUTF8(("Sent pushall request to " + dev_id + "\n\n" + payload).c_str()));
-        m_tabs->SetSelection(2);
+        m_tabs->SetSelection(3);
+    }
+
+    void cloud_print_file()
+    {
+        const std::string dev_id = selected_device_id();
+        if (dev_id.empty())
+            return;
+        wxFileDialog dlg(this, _L("Select .3mf file for Bambu cloud print"), wxEmptyString, wxEmptyString,
+                         _L("3MF files (*.3mf)|*.3mf|All files|*.*"), wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dlg.ShowModal() != wxID_OK)
+            return;
+
+        const std::string filename = into_u8(dlg.GetPath());
+        BambuCloudPrintParams params;
+        params.dev_id = dev_id;
+        params.dev_name = first_json_string(m_device_json[size_t(selected_index())], { "dev_name", "devName", "name", "printer_name" });
+        params.dev_ip = first_json_string(m_device_json[size_t(selected_index())], { "dev_ip", "ip", "lan_ip" });
+        params.filename = filename;
+        params.project_name = boost::filesystem::path(filename).stem().string();
+        params.task_name = params.project_name;
+        params.preset_name = params.project_name;
+        params.connection_type = "cloud";
+        params.print_type = "from_normal";
+        params.plate_index = 0;
+        params.username = "bblp";
+        params.task_bed_leveling = true;
+        params.task_flow_cali = false;
+        params.task_vibration_cali = false;
+        params.task_layer_inspect = false;
+        params.task_record_timelapse = false;
+        params.task_bed_type = "textured_plate";
+
+        std::string error;
+        if (!BambuCloud::instance().start_print(params, [this](int status, int code, std::string msg) {
+                wxGetApp().CallAfter([this, status, code, msg = std::move(msg)] {
+                    m_raw->AppendText(wxString::FromUTF8(GUI::format("Print update status=%1% code=%2% message=%3%\n", status, code, msg).c_str()));
+                });
+            }, error)) {
+            show_error(this, wxString::FromUTF8(error.c_str()));
+            return;
+        }
+        m_raw->SetValue(wxString::FromUTF8(("Started Bambu cloud print for " + dev_id + "\n\n" + filename + "\n").c_str()));
+        m_tabs->SetSelection(3);
+    }
+
+    void on_cloud_message(const std::string &dev_id, const std::string &msg)
+    {
+        const std::string selected = selected_device_id();
+        if (!selected.empty() && dev_id != selected)
+            return;
+        m_last_live_json = msg;
+        update_live_status(dev_id, msg);
+    }
+
+    void update_live_status(const std::string &dev_id, const std::string &msg)
+    {
+        std::string summary = "Device: " + dev_id + "\n";
+        std::string hms_text = "No active HMS items.";
+        const nlohmann::json parsed = nlohmann::json::parse(msg, nullptr, false);
+        const nlohmann::json *print = nullptr;
+        if (!parsed.is_discarded()) {
+            if (parsed.contains("print") && parsed["print"].is_object())
+                print = &parsed["print"];
+            else if (parsed.is_object())
+                print = &parsed;
+        }
+        if (print != nullptr) {
+            const std::vector<std::pair<const char*, const char*>> fields = {
+                { "State", "gcode_state" },
+                { "Stage", "mc_print_stage" },
+                { "Progress", "mc_percent" },
+                { "File", "gcode_file" },
+                { "Nozzle", "nozzle_temper" },
+                { "Nozzle target", "nozzle_target_temper" },
+                { "Bed", "bed_temper" },
+                { "Bed target", "bed_target_temper" },
+                { "Chamber", "chamber_temper" },
+                { "Layer", "layer_num" },
+                { "Total layers", "total_layer_num" },
+                { "Remaining", "mc_remaining_time" }
+            };
+            for (const auto &[label, key] : fields) {
+                const std::string value = json_value_to_string(*print, key);
+                if (!value.empty())
+                    summary += GUI::format("%1%: %2%\n", label, value);
+            }
+            m_last_job_id = json_value_to_string(*print, "job_id");
+            m_last_subtask_id = json_value_to_string(*print, "subtask_id");
+            m_last_print_error = json_value_to_string(*print, "print_error");
+            if (m_last_print_error.empty())
+                m_last_print_error = json_value_to_string(*print, "mc_print_error_code");
+
+            if (const auto hms = print->find("hms"); hms != print->end() && hms->is_array() && !hms->empty()) {
+                hms_text.clear();
+                m_last_hms_code.clear();
+                for (const nlohmann::json &item : *hms) {
+                    if (!item.is_object())
+                        continue;
+                    uint32_t attr = 0;
+                    uint32_t code = 0;
+                    if (cloud_json_u32(item, "attr", attr) && cloud_json_u32(item, "code", code)) {
+                        const std::string line = cloud_hms_line(attr, code);
+                        hms_text += line + "\n";
+                        if (m_last_hms_code.empty())
+                            m_last_hms_code = std::to_string(code);
+                    }
+                }
+            }
+        }
+        m_live_summary->SetValue(wxString::FromUTF8(summary.c_str()));
+        m_live_hms->SetValue(wxString::FromUTF8(hms_text.c_str()));
+        m_live_raw->SetValue(wxString::FromUTF8(msg.c_str()));
     }
 
     wxNotebook *m_tabs { nullptr };
     wxDataViewListCtrl *m_devices { nullptr };
     wxTextCtrl *m_details { nullptr };
     wxTextCtrl *m_raw { nullptr };
+    wxTextCtrl *m_live_summary { nullptr };
+    wxTextCtrl *m_live_hms { nullptr };
+    wxTextCtrl *m_live_raw { nullptr };
+    wxSpinCtrl *m_cloud_nozzle_temp { nullptr };
+    wxSpinCtrl *m_cloud_bed_temp { nullptr };
+    wxChoice *m_cloud_speed { nullptr };
+    wxTextCtrl *m_cloud_gcode { nullptr };
     std::string m_last_user_print_info;
+    std::string m_last_live_json;
+    std::string m_last_job_id;
+    std::string m_last_subtask_id;
+    std::string m_last_print_error;
+    std::string m_last_hms_code;
     std::vector<nlohmann::json> m_device_json;
+    std::shared_ptr<bool> m_alive;
 };
 
 void show_bambu_cloud_devices_dialog(wxWindow *parent)

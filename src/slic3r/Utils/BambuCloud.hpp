@@ -5,6 +5,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace Slic3r {
 
@@ -21,6 +22,52 @@ struct BambuCloudStatus
     std::string user_name;
     std::string user_nickname;
     std::string error;
+};
+
+struct BambuCloudPrintParams
+{
+    std::string dev_id;
+    std::string task_name;
+    std::string project_name;
+    std::string preset_name;
+    std::string filename;
+    std::string config_filename;
+    int plate_index { 0 };
+    std::string ftp_folder;
+    std::string ftp_file;
+    std::string ftp_file_md5;
+    std::string nozzle_mapping;
+    std::string ams_mapping;
+    std::string ams_mapping2;
+    std::string ams_mapping_info;
+    std::string nozzles_info;
+    std::string connection_type;
+    std::string comments;
+    int origin_profile_id { 0 };
+    int stl_design_id { 0 };
+    std::string origin_model_id;
+    std::string print_type;
+    std::string dst_file;
+    std::string dev_name;
+    std::string dev_ip;
+    bool use_ssl_for_ftp { true };
+    bool use_ssl_for_mqtt { true };
+    std::string username;
+    std::string password;
+    bool task_bed_leveling { true };
+    bool task_flow_cali { false };
+    bool task_vibration_cali { false };
+    bool task_layer_inspect { false };
+    bool task_record_timelapse { false };
+    bool task_use_ams { false };
+    std::string task_bed_type;
+    std::string extra_options;
+    int auto_bed_leveling { 0 };
+    int auto_flow_cali { 0 };
+    int auto_offset_cali { 0 };
+    int extruder_cali_manual_mode { -1 };
+    bool task_ext_change_assist { false };
+    bool try_emmc_print { false };
 };
 
 class BambuCloud
@@ -40,9 +87,12 @@ public:
     bool get_user_print_info(std::string &body, unsigned int &http_code, std::string &error);
     bool query_bind_status(const std::vector<std::string> &device_ids, std::string &body, unsigned int &http_code, std::string &error);
     bool get_printer_firmware(const std::string &device_id, std::string &body, unsigned int &http_code, std::string &error);
+    bool get_camera_url(const std::string &device_id, std::string &url, std::string &error);
     bool send_cloud_message(const std::string &device_id, const std::string &json, int qos, int flag, std::string &error);
     bool start_subscribe(const std::string &module, std::string &error);
     bool add_subscribe(const std::vector<std::string> &device_ids, std::string &error);
+    bool set_message_callback(std::function<void(std::string, std::string)> callback, std::string &error);
+    bool start_print(const BambuCloudPrintParams &params, std::function<void(int, int, std::string)> progress, std::string &error);
 
     std::string build_login_cmd() const;
     std::string build_login_info() const;
@@ -74,9 +124,12 @@ private:
     using func_get_user_print_info = int (*)(void*, unsigned int*, std::string*);
     using func_query_bind_status = int (*)(void*, std::vector<std::string>, unsigned int*, std::string*);
     using func_get_printer_firmware = int (*)(void*, std::string, unsigned int*, std::string*);
+    using func_get_camera_url = int (*)(void*, std::string, std::function<void(std::string)>);
     using func_send_message = int (*)(void*, std::string, std::string, int, int);
     using func_start_subscribe = int (*)(void*, std::string);
     using func_add_subscribe = int (*)(void*, std::vector<std::string>);
+    using func_set_on_message_fn = int (*)(void*, std::function<void(std::string, std::string)>);
+    using func_start_print = int (*)(void*, BambuCloudPrintParams, std::function<void(int, int, std::string)>, std::function<bool()>, std::function<bool(int, std::string)>);
 
     void* get_symbol(const char *name) const;
     bool load_functions(std::string &error);
@@ -109,9 +162,12 @@ private:
     func_get_user_print_info m_get_user_print_info { nullptr };
     func_query_bind_status m_query_bind_status { nullptr };
     func_get_printer_firmware m_get_printer_firmware { nullptr };
+    func_get_camera_url m_get_camera_url { nullptr };
     func_send_message m_send_message { nullptr };
     func_start_subscribe m_start_subscribe { nullptr };
     func_add_subscribe m_add_subscribe { nullptr };
+    func_set_on_message_fn m_set_on_message_fn { nullptr };
+    func_start_print m_start_print { nullptr };
 };
 
 } // namespace Slic3r

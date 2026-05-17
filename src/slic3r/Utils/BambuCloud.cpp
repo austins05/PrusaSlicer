@@ -94,9 +94,12 @@ void BambuCloud::shutdown()
     m_get_user_print_info = nullptr;
     m_query_bind_status = nullptr;
     m_get_printer_firmware = nullptr;
+    m_get_camera_url = nullptr;
     m_send_message = nullptr;
     m_start_subscribe = nullptr;
     m_add_subscribe = nullptr;
+    m_set_on_message_fn = nullptr;
+    m_start_print = nullptr;
 }
 
 bool BambuCloud::import_orca_plugin(std::string &error)
@@ -200,9 +203,12 @@ bool BambuCloud::load_functions(std::string &error)
     m_get_user_print_info = reinterpret_cast<func_get_user_print_info>(get_symbol("bambu_network_get_user_print_info"));
     m_query_bind_status = reinterpret_cast<func_query_bind_status>(get_symbol("bambu_network_query_bind_status"));
     m_get_printer_firmware = reinterpret_cast<func_get_printer_firmware>(get_symbol("bambu_network_get_printer_firmware"));
+    m_get_camera_url = reinterpret_cast<func_get_camera_url>(get_symbol("bambu_network_get_camera_url"));
     m_send_message = reinterpret_cast<func_send_message>(get_symbol("bambu_network_send_message"));
     m_start_subscribe = reinterpret_cast<func_start_subscribe>(get_symbol("bambu_network_start_subscribe"));
     m_add_subscribe = reinterpret_cast<func_add_subscribe>(get_symbol("bambu_network_add_subscribe"));
+    m_set_on_message_fn = reinterpret_cast<func_set_on_message_fn>(get_symbol("bambu_network_set_on_message_fn"));
+    m_start_print = reinterpret_cast<func_start_print>(get_symbol("bambu_network_start_print"));
 
     if (m_create_agent == nullptr || m_destroy_agent == nullptr || m_change_user == nullptr ||
         m_is_user_login == nullptr || m_build_login_cmd == nullptr || m_build_login_info == nullptr) {
@@ -364,6 +370,22 @@ bool BambuCloud::get_printer_firmware(const std::string &device_id, std::string 
     return true;
 }
 
+bool BambuCloud::get_camera_url(const std::string &device_id, std::string &url, std::string &error)
+{
+    url.clear();
+    error.clear();
+    if (m_agent == nullptr || m_get_camera_url == nullptr) {
+        error = "Bambu cloud camera URL API is not initialized.";
+        return false;
+    }
+    const int result = m_get_camera_url(m_agent, device_id, [&url](std::string value) { url = std::move(value); });
+    if (result != 0) {
+        error = "Bambu cloud camera URL API failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
 bool BambuCloud::send_cloud_message(const std::string &device_id, const std::string &json, int qos, int flag, std::string &error)
 {
     error.clear();
@@ -374,6 +396,45 @@ bool BambuCloud::send_cloud_message(const std::string &device_id, const std::str
     const int result = m_send_message(m_agent, device_id, json, qos, flag);
     if (result != 0) {
         error = "Bambu cloud message send failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::set_message_callback(std::function<void(std::string, std::string)> callback, std::string &error)
+{
+    error.clear();
+    if (m_agent == nullptr || m_set_on_message_fn == nullptr) {
+        error = "Bambu cloud message callback API is not initialized.";
+        return false;
+    }
+    const int result = m_set_on_message_fn(m_agent, std::move(callback));
+    if (result != 0) {
+        error = "Bambu cloud message callback registration failed with result " + std::to_string(result) + ".";
+        return false;
+    }
+    return true;
+}
+
+bool BambuCloud::start_print(const BambuCloudPrintParams &params, std::function<void(int, int, std::string)> progress, std::string &error)
+{
+    error.clear();
+    if (m_agent == nullptr || m_start_print == nullptr) {
+        error = "Bambu cloud print API is not initialized.";
+        return false;
+    }
+    auto update = std::move(progress);
+    const int result = m_start_print(
+        m_agent,
+        params,
+        [update](int status, int code, std::string msg) mutable {
+            if (update)
+                update(status, code, std::move(msg));
+        },
+        []() { return false; },
+        [](int, std::string) { return true; });
+    if (result != 0) {
+        error = "Bambu cloud print failed with result " + std::to_string(result) + ".";
         return false;
     }
     return true;
