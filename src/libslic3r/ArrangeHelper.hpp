@@ -37,6 +37,8 @@ namespace Slic3r {
 		Sequential::SolverConfiguration m_solver_configuration;
 		std::vector<Sequential::ObjectToPrint> m_objects;
 		std::optional<Vec2crd> m_wipe_tower_relative_pos;
+		coord_t m_clearance_lift_radius = 0;
+		coord_t m_clearance_lift_height = 0;
 		int m_selected_bed = -1;
 		bool m_use_fixed_order_arrange = false;
 

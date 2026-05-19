@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,106 @@ static double bbox_perimeter(const BoundingBox& bb)
 
 	const Vec2crd size = bb.size();
 	return 2. * static_cast<double>(std::max<coord_t>(0, size.x()) + std::max<coord_t>(0, size.y()));
+}
+
+struct SequentialClearanceScoring {
+	coord_t radius = 0;
+	coord_t height = 0;
+
+	bool enabled() const { return radius > 0 && height > 0; }
+};
+
+struct SequentialScheduleScore {
+	size_t plate_count = 0;
+	coord_t max_required_lift = 0;
+	double total_required_lift = 0.;
+	double compactness = 0.;
+};
+
+static double point_to_box_distance_sq(const Vec2crd& point, const BoundingBox& box)
+{
+	const double dx = point.x() < box.min.x() ? double(box.min.x() - point.x()) :
+					  point.x() > box.max.x() ? double(point.x() - box.max.x()) : 0.;
+	const double dy = point.y() < box.min.y() ? double(box.min.y() - point.y()) :
+					  point.y() > box.max.y() ? double(point.y() - box.max.y()) : 0.;
+	return dx * dx + dy * dy;
+}
+
+static bool segment_intersects_box(const Vec2crd& a, const Vec2crd& b, const BoundingBox& box)
+{
+	double t_min = 0.;
+	double t_max = 1.;
+	const double ax = double(a.x());
+	const double ay = double(a.y());
+	const double vx = double(b.x() - a.x());
+	const double vy = double(b.y() - a.y());
+
+	auto clip = [&t_min, &t_max](double p, double q) {
+		if (std::abs(p) < EPSILON)
+			return q >= 0.;
+		const double t = q / p;
+		if (p < 0.) {
+			if (t > t_max)
+				return false;
+			if (t > t_min)
+				t_min = t;
+		} else {
+			if (t < t_min)
+				return false;
+			if (t < t_max)
+				t_max = t;
+		}
+		return true;
+	};
+
+	return clip(-vx, ax - double(box.min.x())) &&
+		   clip(vx, double(box.max.x()) - ax) &&
+		   clip(-vy, ay - double(box.min.y())) &&
+		   clip(vy, double(box.max.y()) - ay);
+}
+
+static double segment_to_box_distance_sq(const Vec2crd& a, const Vec2crd& b, const BoundingBox& box)
+{
+	if (box.contains(a) || box.contains(b) || segment_intersects_box(a, b, box))
+		return 0.;
+
+	double best = std::min(point_to_box_distance_sq(a, box), point_to_box_distance_sq(b, box));
+	const double ax = double(a.x());
+	const double ay = double(a.y());
+	const double bx = double(b.x());
+	const double by = double(b.y());
+	const double vx = bx - ax;
+	const double vy = by - ay;
+	const double len_sq = vx * vx + vy * vy;
+	if (len_sq <= 0.)
+		return best;
+
+	const std::array<Vec2crd, 4> corners{{
+		box.min,
+		Vec2crd(box.max.x(), box.min.y()),
+		box.max,
+		Vec2crd(box.min.x(), box.max.y())
+	}};
+	for (const Vec2crd& corner : corners) {
+		const double t = std::clamp(((double(corner.x()) - ax) * vx + (double(corner.y()) - ay) * vy) / len_sq, 0., 1.);
+		const double px = ax + t * vx;
+		const double py = ay + t * vy;
+		const double dx = double(corner.x()) - px;
+		const double dy = double(corner.y()) - py;
+		best = std::min(best, dx * dx + dy * dy);
+	}
+
+	return best;
+}
+
+static SequentialClearanceScoring sequential_clearance_scoring(const ConfigBase& config)
+{
+	SequentialClearanceScoring out;
+	if (config.has("extruder_clearance_radius"))
+		out.radius = scaled(std::max(0., config.opt_float("extruder_clearance_radius")) + 5.);
+	if (config.has("extruder_clearance_height"))
+		out.height = scaled(std::max(0., config.opt_float("extruder_clearance_height")));
+	return out;
 }
 
 static BoundingBox model_instance_local_box(const ModelObject& object, const ModelInstance& instance)
@@ -437,16 +538,80 @@ static double schedule_compactness_score(
 	return score;
 }
 
+static SequentialScheduleScore schedule_score(
+	const std::vector<Sequential::ScheduledPlate>& plates,
+	const std::vector<Sequential::ObjectToPrint>& objects,
+	const SequentialClearanceScoring& clearance_scoring)
+{
+	SequentialScheduleScore out;
+	out.plate_count = plates.size();
+	out.compactness = schedule_compactness_score(plates, objects);
+
+	if (!clearance_scoring.enabled())
+		return out;
+
+	const double radius_sq = double(clearance_scoring.radius) * double(clearance_scoring.radius);
+	const coord_t lift_margin = scaled(0.5);
+
+	for (const Sequential::ScheduledPlate& plate : plates) {
+		struct CompletedObject {
+			BoundingBox box;
+			coord_t height = 0;
+		};
+		std::vector<CompletedObject> completed;
+		std::optional<Vec2crd> previous_center;
+
+		for (const Sequential::ScheduledObject& scheduled : plate.scheduled_objects) {
+			const Sequential::ObjectToPrint* object = find_sequential_object(objects, scheduled.id);
+			if (object == nullptr)
+				continue;
+
+			BoundingBox current_box = sequential_object_extents(*object);
+			if (!current_box.defined)
+				continue;
+			current_box.translate(Point(scheduled.x, scheduled.y));
+
+			const Vec2crd current_center = current_box.center();
+			if (previous_center) {
+				for (const CompletedObject& printed : completed) {
+					if (segment_to_box_distance_sq(*previous_center, current_center, printed.box) <= radius_sq) {
+						const coord_t required_lift = std::max<coord_t>(0, printed.height - clearance_scoring.height + lift_margin);
+						out.max_required_lift = std::max(out.max_required_lift, required_lift);
+						out.total_required_lift += double(required_lift);
+					}
+				}
+			}
+
+			completed.push_back({ current_box, sequential_object_height(*object) });
+			previous_center = current_center;
+		}
+	}
+
+	return out;
+}
+
+static bool is_better_score(const SequentialScheduleScore& candidate, const SequentialScheduleScore& current)
+{
+	if (current.plate_count == 0)
+		return true;
+	if (candidate.plate_count != current.plate_count)
+		return candidate.plate_count < current.plate_count;
+	if (candidate.max_required_lift != current.max_required_lift)
+		return candidate.max_required_lift < current.max_required_lift;
+	if (std::abs(candidate.total_required_lift - current.total_required_lift) > 1.)
+		return candidate.total_required_lift < current.total_required_lift;
+	return candidate.compactness < current.compactness;
+}
+
 static bool is_better_schedule(
 	const std::vector<Sequential::ScheduledPlate>& candidate,
 	const std::vector<Sequential::ScheduledPlate>& current,
-	const std::vector<Sequential::ObjectToPrint>& objects)
+	const std::vector<Sequential::ObjectToPrint>& objects,
+	const SequentialClearanceScoring& clearance_scoring)
 {
-	if (current.empty())
-		return true;
-	if (candidate.size() != current.size())
-		return candidate.size() < current.size();
-	return schedule_compactness_score(candidate, objects) < schedule_compactness_score(current, objects);
+	return is_better_score(
+		schedule_score(candidate, objects, clearance_scoring),
+		schedule_score(current, objects, clearance_scoring));
 }
 
 static void append_unique_coord(std::vector<coord_t>& coords, coord_t value, coord_t min, coord_t max)
@@ -486,6 +651,7 @@ static bool try_place_sequential_object(
 	const Sequential::SolverConfiguration& solver_configuration,
 	const Sequential::PrinterGeometry& printer_geometry,
 	const std::vector<Sequential::ObjectToPrint>& objects,
+	const SequentialClearanceScoring& clearance_scoring,
 	coord_t step,
 	bool include_grid)
 {
@@ -526,15 +692,15 @@ static bool try_place_sequential_object(
 	const size_t max_attempts = include_grid ? 20000 : 12000;
 	size_t attempts = 0;
 	std::optional<Sequential::ScheduledObject> best_object;
-	double best_score = std::numeric_limits<double>::max();
+	SequentialScheduleScore best_score;
 	for (coord_t y : ys) {
 		for (coord_t x : xs) {
 			if (++attempts > max_attempts)
 				break;
 			plate.scheduled_objects.emplace_back(object.id, x, y);
 			if (!sequential_schedule_has_conflict(solver_configuration, printer_geometry, objects, std::vector<Sequential::ScheduledPlate>{plate})) {
-				const double score = schedule_compactness_score(std::vector<Sequential::ScheduledPlate>{plate}, objects);
-				if (score < best_score) {
+				const SequentialScheduleScore score = schedule_score(std::vector<Sequential::ScheduledPlate>{plate}, objects, clearance_scoring);
+				if (is_better_score(score, best_score)) {
 					best_score = score;
 					best_object = plate.scheduled_objects.back();
 				}
@@ -555,7 +721,8 @@ static bool try_place_sequential_object(
 static std::vector<Sequential::ScheduledPlate> greedy_schedule_in_fixed_order(
 	const Sequential::SolverConfiguration& solver_configuration,
 	const Sequential::PrinterGeometry& printer_geometry,
-	const std::vector<Sequential::ObjectToPrint>& objects)
+	const std::vector<Sequential::ObjectToPrint>& objects,
+	const SequentialClearanceScoring& clearance_scoring)
 {
 	BoundingBox bed_bb = get_extents(printer_geometry.plate);
 	if (!bed_bb.defined)
@@ -579,11 +746,11 @@ static std::vector<Sequential::ScheduledPlate> greedy_schedule_in_fixed_order(
 		for (const auto& [step, include_grid] : search_passes)
 			for (Sequential::ScheduledPlate& plate : plates)
 				if (!placed)
-					placed = try_place_sequential_object(plate, object, object_bb, bed_bb, solver_configuration, printer_geometry, objects, step, include_grid);
+					placed = try_place_sequential_object(plate, object, object_bb, bed_bb, solver_configuration, printer_geometry, objects, clearance_scoring, step, include_grid);
 
 		if (!placed) {
 			Sequential::ScheduledPlate new_plate;
-			if (!try_place_sequential_object(new_plate, object, object_bb, bed_bb, solver_configuration, printer_geometry, objects, search_passes.front().first, true))
+			if (!try_place_sequential_object(new_plate, object, object_bb, bed_bb, solver_configuration, printer_geometry, objects, clearance_scoring, search_passes.front().first, true))
 				new_plate.scheduled_objects.emplace_back(object.id, 0, 0);
 			plates.emplace_back(std::move(new_plate));
 		}
@@ -639,6 +806,7 @@ static std::vector<Sequential::ScheduledPlate> greedy_schedule_best_effort(
 	const Sequential::SolverConfiguration& solver_configuration,
 	const Sequential::PrinterGeometry& printer_geometry,
 	const std::vector<Sequential::ObjectToPrint>& objects,
+	const SequentialClearanceScoring& clearance_scoring,
 	bool allow_reorder)
 {
 	std::vector<std::vector<SequentialObjectChain>> variants;
@@ -672,16 +840,16 @@ static std::vector<Sequential::ScheduledPlate> greedy_schedule_best_effort(
 	for (const std::vector<SequentialObjectChain>& variant : variants) {
 		std::vector<Sequential::ObjectToPrint> ordered_objects = flatten_object_chains(variant);
 		std::vector<Sequential::ScheduledPlate> candidate =
-			greedy_schedule_in_fixed_order(solver_configuration, printer_geometry, ordered_objects);
+			greedy_schedule_in_fixed_order(solver_configuration, printer_geometry, ordered_objects, clearance_scoring);
 		if (sequential_schedule_has_conflict(solver_configuration, printer_geometry, ordered_objects, candidate))
 			continue;
-		if (is_better_schedule(candidate, best, ordered_objects))
+		if (is_better_schedule(candidate, best, ordered_objects, clearance_scoring))
 			best = std::move(candidate);
 	}
 
 	if (!best.empty())
 		return best;
-	return greedy_schedule_in_fixed_order(solver_configuration, printer_geometry, objects);
+	return greedy_schedule_in_fixed_order(solver_configuration, printer_geometry, objects, clearance_scoring);
 }
 
 static std::vector<Sequential::ObjectToPrint> get_objects_to_print(
@@ -863,6 +1031,9 @@ SeqArrange::SeqArrange(const Model& model, const ConfigBase& config, bool curren
     m_printer_geometry = get_printer_geometry(config);
 	m_solver_configuration = get_solver_config(m_printer_geometry);
 	m_wipe_tower_relative_pos = optimal_sequential_wipe_tower_relative_pos(model, config);
+	const SequentialClearanceScoring clearance_scoring = sequential_clearance_scoring(config);
+	m_clearance_lift_radius = clearance_scoring.radius;
+	m_clearance_lift_height = clearance_scoring.height;
 	m_objects = get_objects_to_print(model, m_printer_geometry, m_selected_bed, m_wipe_tower_relative_pos, config);
 	tune_solver_config_for_arrange(m_solver_configuration, m_objects.size());
 	m_use_fixed_order_arrange = has_custom_sequential_order(model);
@@ -872,8 +1043,9 @@ SeqArrange::SeqArrange(const Model& model, const ConfigBase& config, bool curren
 
 void SeqArrange::process_seq_arrange(std::function<void(int)> progress_fn)
 {
+	const SequentialClearanceScoring clearance_scoring{ m_clearance_lift_radius, m_clearance_lift_height };
 	if (m_use_fixed_order_arrange) {
-		m_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, false);
+		m_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, clearance_scoring, false);
 		progress_fn(100);
 	} else {
 		m_plates =
@@ -883,11 +1055,11 @@ void SeqArrange::process_seq_arrange(std::function<void(int)> progress_fn)
 				m_objects, progress_fn);
 		std::vector<Sequential::ScheduledPlate> greedy_plates;
 		if (sequential_schedule_has_conflict(m_solver_configuration, m_printer_geometry, m_objects, m_plates)) {
-			greedy_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, true);
+			greedy_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, clearance_scoring, true);
 			m_plates = std::move(greedy_plates);
 		} else {
-			greedy_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, true);
-			if (is_better_schedule(greedy_plates, m_plates, m_objects) &&
+			greedy_plates = greedy_schedule_best_effort(m_solver_configuration, m_printer_geometry, m_objects, clearance_scoring, true);
+			if (is_better_schedule(greedy_plates, m_plates, m_objects, clearance_scoring) &&
 				!sequential_schedule_has_conflict(m_solver_configuration, m_printer_geometry, m_objects, greedy_plates))
 				m_plates = std::move(greedy_plates);
 		}
