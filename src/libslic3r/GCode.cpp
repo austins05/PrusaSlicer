@@ -108,6 +108,7 @@ struct SequentialWipeTowerData
     std::unique_ptr<std::vector<WipeTower::ToolChangeResult>> priming;
     std::vector<std::vector<WipeTower::ToolChangeResult>> tool_changes;
     std::unique_ptr<WipeTower::ToolChangeResult> final_purge;
+    std::vector<std::pair<float, std::vector<float>>> used_filament_until_layer;
 };
 
 static PrintConfig make_sequential_wipe_tower_config(const PrintConfig &config)
@@ -171,6 +172,7 @@ static std::optional<SequentialWipeTowerData> make_sequential_wipe_tower_data(
 
     data.tool_changes.reserve(tool_ordering.layer_tools().size());
     wipe_tower.generate(data.tool_changes);
+    data.used_filament_until_layer = wipe_tower.get_used_filament_until_layer();
 
     const coordf_t layer_height = object.config().layer_height.value;
     if (tool_ordering.back().wipe_tower_partitions > 0) {
@@ -745,6 +747,12 @@ void GCodeGenerator::do_export(Print* print, const char* path, GCodeProcessorRes
     BOOST_LOG_TRIVIAL(debug) << "Start processing gcode, " << log_memory_info();
     // Post-process the G-code to update time stamps.
     m_processor.finalize(true);
+    if (const auto &collision = m_processor.get_result().sequential_collision_detected) {
+        const Vec2d point = collision->point.value_or(Vec2d::Zero());
+        throw Slic3r::SlicingError(Slic3r::format(
+            _u8L("Sequential print collision detected: %1% may hit %2% near X=%3$.2f Y=%4$.2f. Rearrange objects or increase spacing before exporting G-code."),
+            collision->printing_object, collision->hit_object, point.x(), point.y()));
+    }
 //    DoExport::update_print_estimated_times_stats(m_processor, print->m_print_statistics);
     DoExport::update_print_estimated_stats(m_processor, m_writer.extruders(), print->m_print_statistics);
     if (result != nullptr) {
@@ -848,7 +856,8 @@ namespace DoExport {
         int                          total_toolchanges,
         PrintStatistics              &print_statistics,
         bool                         export_binary_data,
-        bgcode::binarize::BinaryData &binary_data)
+        bgcode::binarize::BinaryData &binary_data,
+        const std::vector<float>     *sequential_wipe_tower_filament_by_extruder = nullptr)
     {
         std::string filament_stats_string_out;
 
@@ -865,8 +874,17 @@ namespace DoExport {
                 print_statistics.printing_extruders.emplace_back(extruder.id());
                 filament_types.emplace_back(config.filament_type.get_at(extruder.id()));
 
-                double used_filament   = extruder.used_filament() + (has_wipe_tower ? wipe_tower_data.used_filament_until_layer.back().second[extruder.id()] : 0.f);
-                double extruded_volume = extruder.extruded_volume() + (has_wipe_tower ? wipe_tower_data.used_filament_until_layer.back().second[extruder.id()] * extruder.filament_crossection() : 0.f); // assumes 1.75mm filament diameter
+                double wipe_tower_filament = 0.;
+                if (has_wipe_tower) {
+                    if (sequential_wipe_tower_filament_by_extruder != nullptr) {
+                        if (extruder.id() < sequential_wipe_tower_filament_by_extruder->size())
+                            wipe_tower_filament = (*sequential_wipe_tower_filament_by_extruder)[extruder.id()];
+                    } else {
+                        wipe_tower_filament = wipe_tower_data.used_filament_until_layer.back().second[extruder.id()];
+                    }
+                }
+                double used_filament   = extruder.used_filament() + wipe_tower_filament;
+                double extruded_volume = extruder.extruded_volume() + wipe_tower_filament * extruder.filament_crossection(); // assumes 1.75mm filament diameter
                 double filament_weight = extruded_volume * extruder.filament_density() * 0.001;
                 double filament_cost   = filament_weight * extruder.filament_cost()    * 0.001;
                 auto append = [&extruder](std::pair<std::string, unsigned int> &dst, const char *tmpl, double value) {
@@ -1494,6 +1512,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
     GCode::SmoothPathCache smooth_path_cache_global = smooth_path_interpolate_global(print);
 
     // Do all objects for each layer.
+    std::vector<float> sequential_wipe_tower_filament;
+
     if (print.config().complete_objects.value) {
         m_completed_sequential_objects.clear();
         size_t finished_objects = 0;
@@ -1523,6 +1543,13 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                     wipe_tower_pos, print.model().wipe_tower().rotation, wipe_tower_config,
                     *sequential_wipe_tower_data->priming, sequential_wipe_tower_data->tool_changes,
                     *sequential_wipe_tower_data->final_purge);
+                if (!sequential_wipe_tower_data->used_filament_until_layer.empty()) {
+                    const std::vector<float> &object_wipe_filament = sequential_wipe_tower_data->used_filament_until_layer.back().second;
+                    if (sequential_wipe_tower_filament.size() < object_wipe_filament.size())
+                        sequential_wipe_tower_filament.resize(object_wipe_filament.size(), 0.f);
+                    for (size_t extruder_id = 0; extruder_id < object_wipe_filament.size(); ++extruder_id)
+                        sequential_wipe_tower_filament[extruder_id] += object_wipe_filament[extruder_id];
+                }
                 if (finished_objects == 0 && print.config().single_extruder_multi_material_priming) {
                     Vec3d new_position = this->writer().get_position();
                     new_position.z() = first_layer_height;
@@ -1693,12 +1720,15 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
     print.throw_if_canceled();
 
     // Get filament stats.
+    const bool has_sequential_wipe_tower_stats = has_wipe_tower &&
+        print.config().complete_objects.value &&
+        !sequential_wipe_tower_filament.empty();
     const bool has_global_wipe_tower_stats = has_wipe_tower &&
         !print.config().complete_objects.value &&
         !print.wipe_tower_data().used_filament_until_layer.empty();
     const std::string filament_stats_string_out = DoExport::update_print_stats_and_format_filament_stats(
         // Const inputs
-        has_global_wipe_tower_stats, print.wipe_tower_data(),
+        has_global_wipe_tower_stats || has_sequential_wipe_tower_stats, print.wipe_tower_data(),
         this->config(),
         m_writer.extruders(),
         initial_extruder_id,
@@ -1706,7 +1736,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
         // Modifies
         print.m_print_statistics,
         export_to_binary_gcode,
-        m_processor.get_binary_data()
+        m_processor.get_binary_data(),
+        has_sequential_wipe_tower_stats ? &sequential_wipe_tower_filament : nullptr
     );
 
     if (!export_to_binary_gcode) {

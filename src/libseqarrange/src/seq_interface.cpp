@@ -211,6 +211,153 @@ std::optional<std::pair<int, int> > check_ScheduledObjectsForSequentialConflict(
     return {};
 }
 
+
+static Vec2d sequential_polygon_center(const Slic3r::Polygon &polygon, const Rational &x, const Rational &y)
+{
+    BoundingBox bbox = get_extents(polygon);
+    return Vec2d(x.as_double() + (bbox.min.x() + bbox.max.x()) * 0.5,
+                 y.as_double() + (bbox.min.y() + bbox.max.y()) * 0.5);
+}
+
+static Vec2d sequential_line_intersection_estimate(double ax, double ay, double ux, double uy, double bx, double by, double vx, double vy)
+{
+    const double denom = ux * vy - uy * vx;
+    if (std::abs(denom) > EPSILON) {
+        const double t = ((bx - ax) * vy - (by - ay) * vx) / denom;
+        return Vec2d(ax + t * ux, ay + t * uy);
+    }
+    return Vec2d((ax + bx) * 0.5, (ay + by) * 0.5);
+}
+
+static bool point_inside_shifted_convex_polygon(double px, double py,
+                                                const Slic3r::Polygon &polygon,
+                                                const Rational &x,
+                                                const Rational &y)
+{
+    if (polygon.points.size() < 3)
+        return false;
+
+    for (unsigned int p = 0; p < polygon.points.size(); ++p) {
+        const Point &a = polygon.points[p];
+        const Point &b = polygon.points[(p + 1) % polygon.points.size()];
+        Line line(a, b);
+        Vector normal = line.normal();
+        const double outside = normal.x() * px + normal.y() * py
+                             - normal.x() * x.as_double() - normal.x() * line.a.x()
+                             - normal.y() * y.as_double() - normal.y() * line.a.y();
+        if (outside > -EPSILON)
+            return false;
+    }
+    return true;
+}
+
+static bool segment_hits_shifted_polygon(const Vec2d &from,
+                                         const Vec2d &to,
+                                         const Slic3r::Polygon &polygon,
+                                         const Rational &x,
+                                         const Rational &y,
+                                         Vec2d *conflict_point)
+{
+    if (polygon.points.size() < 3)
+        return false;
+
+    if (point_inside_shifted_convex_polygon(from.x(), from.y(), polygon, x, y)) {
+        if (conflict_point != nullptr)
+            *conflict_point = from;
+        return true;
+    }
+    if (point_inside_shifted_convex_polygon(to.x(), to.y(), polygon, x, y)) {
+        if (conflict_point != nullptr)
+            *conflict_point = to;
+        return true;
+    }
+
+    const double ux = to.x() - from.x();
+    const double uy = to.y() - from.y();
+    for (unsigned int p = 0; p < polygon.points.size(); ++p) {
+        const Point &a = polygon.points[p];
+        const Point &b = polygon.points[(p + 1) % polygon.points.size()];
+        const double bx = x.as_double() + a.x();
+        const double by = y.as_double() + a.y();
+        const double vx = b.x() - a.x();
+        const double vy = b.y() - a.y();
+        if (lines_intersect_open(from.x(), from.y(), ux, uy, bx, by, vx, vy)) {
+            if (conflict_point != nullptr)
+                *conflict_point = sequential_line_intersection_estimate(from.x(), from.y(), ux, uy, bx, by, vx, vy);
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::optional<SequentialConflict> check_ToolchangeTravelConflict(
+    const std::vector<Rational>                      &dec_values_X,
+    const std::vector<Rational>                      &dec_values_Y,
+    const std::vector<Slic3r::Polygon>               &polygons,
+    const std::vector<std::vector<Slic3r::Polygon> > &unreachable_polygons,
+    const std::vector<bool>                           &toolchange_to_next,
+    const ScheduledPlate                             &scheduled_plate)
+{
+    // Sequential static checks verify the extruder while printing each object.
+    // Tool changes add a separate risk: the head travels from the previous
+    // object to the next object after other objects are already printed. Model
+    // that handoff conservatively as a straight center-to-center move and test
+    // it against all earlier completed objects, excluding the object we are
+    // leaving and the object we are about to print.
+    //
+    // Do this only for explicit glued/toolchange pairs. Running it for every
+    // ordinary sequential transition is too conservative because normal moves
+    // between separate objects can route around printed parts in generated
+    // G-code, while a glued object/wipe-tower toolchange pair must be treated
+    // as one constrained handoff.
+    for (unsigned int move_to = 1; move_to < scheduled_plate.scheduled_objects.size(); ++move_to) {
+        const unsigned int move_from = move_to - 1;
+        if (move_from >= toolchange_to_next.size() || !toolchange_to_next[move_from])
+            continue;
+        const Vec2d from = sequential_polygon_center(polygons[move_from], dec_values_X[move_from], dec_values_Y[move_from]);
+        const Vec2d to   = sequential_polygon_center(polygons[move_to],   dec_values_X[move_to],   dec_values_Y[move_to]);
+
+        // Only reject unavoidable straight toolchange handoffs here. More
+        // complex non-axis-aligned moves need real G-code/toolpath context to
+        // avoid false positives in existing valid sequential schedules.
+        if (std::abs(from.x() - to.x()) > EPSILON && std::abs(from.y() - to.y()) > EPSILON)
+            continue;
+
+        for (unsigned int printed = 0; printed + 1 < move_to; ++printed) {
+            auto route_hits_printed = [&](const Vec2d &a, const Vec2d &b, const Vec2d &c, Vec2d *hit) {
+                for (const Slic3r::Polygon &zone : unreachable_polygons[printed]) {
+                    if (segment_hits_shifted_polygon(a, b, zone, dec_values_X[printed], dec_values_Y[printed], hit))
+                        return true;
+                    if (segment_hits_shifted_polygon(b, c, zone, dec_values_X[printed], dec_values_Y[printed], hit))
+                        return true;
+                }
+                return false;
+            };
+
+            Vec2d conflict_point(0., 0.);
+            const Vec2d x_then_y(to.x(), from.y());
+            const Vec2d y_then_x(from.x(), to.y());
+            Vec2d unused_hit(0., 0.);
+            const bool x_then_y_blocked = route_hits_printed(from, x_then_y, to, &conflict_point);
+            const bool y_then_x_blocked = route_hits_printed(from, y_then_x, to, &unused_hit);
+
+            // If at least one simple orthogonal dogleg is clear, do not reject
+            // the schedule here. The real G-code planner may choose a non-center
+            // path, so direct-line-only rejection was too conservative.
+            if (x_then_y_blocked && y_then_x_blocked) {
+                return SequentialConflict{
+                    scheduled_plate.scheduled_objects[printed].id,
+                    scheduled_plate.scheduled_objects[move_to].id,
+                    Point(coord_t(std::llround(conflict_point.x() * SEQ_SLICER_SCALE_FACTOR)),
+                          coord_t(std::llround(conflict_point.y() * SEQ_SLICER_SCALE_FACTOR))),
+                    true
+                };
+            }
+        }
+    }
+    return {};
+}
+
 std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDetailed(const SolverConfiguration         &solver_configuration,
 										     const PrinterGeometry             &printer_geometry,
 										     const std::vector<ObjectToPrint>  &objects_to_print,
@@ -266,6 +413,7 @@ std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDet
 	std::vector<Rational> dec_values_X;
 	std::vector<Rational> dec_values_Y;
 	std::vector<Rational> dec_values_T;
+	std::vector<bool> plate_glued_to_next;
 	
 	for (const auto& scheduled_object: scheduled_plate.scheduled_objects)
 	{   
@@ -291,6 +439,7 @@ std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDet
 
 	    plate_polygons.push_back(polygons[flat_index]);
 	    plate_unreachable_polygons.push_back(unreachable_polygons[flat_index]);
+	    plate_glued_to_next.push_back(objects_to_print[flat_index].glued_to_next);
 
 	    dec_values_X.push_back(scaleDown_CoordinateForSequentialSolver(scheduled_object.x));
 	    dec_values_Y.push_back(scaleDown_CoordinateForSequentialSolver(scheduled_object.y));
@@ -347,6 +496,16 @@ std::optional<SequentialConflict> check_ScheduledObjectsForSequentialConflictDet
 		      coord_t(std::llround(conflict_point.y() * SEQ_SLICER_SCALE_FACTOR))),
 		true
 	    };
+	}
+
+	if (auto conflict = check_ToolchangeTravelConflict(dec_values_X,
+							 dec_values_Y,
+							 plate_polygons,
+							 plate_unreachable_polygons,
+							 plate_glued_to_next,
+							 scheduled_plate))
+	{
+	    return conflict;
 	}
 	#ifdef DEBUG
 	{

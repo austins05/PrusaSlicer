@@ -1250,3 +1250,51 @@ TEST_CASE("Interface test 6", "[Sequential Arrangement Interface]")
 /*----------------------------------------------------------------*/
 
 
+
+
+
+TEST_CASE("Interface detects toolchange travel collision with already printed object", "[Sequential Arrangement Interface]")
+{
+    auto rect = [](coord_t min_x, coord_t min_y, coord_t max_x, coord_t max_y) {
+        return Slic3r::Polygon({ { min_x, min_y }, { max_x, min_y }, { max_x, max_y }, { min_x, max_y } });
+    };
+
+    PrinterGeometry printer_geometry;
+    printer_geometry.plate = rect(0, 0, 140 * SEQ_SLICER_SCALE_FACTOR, 40 * SEQ_SLICER_SCALE_FACTOR);
+    printer_geometry.convex_heights.insert(0);
+    printer_geometry.extruder_slices[0] = { rect(-2 * SEQ_SLICER_SCALE_FACTOR, -2 * SEQ_SLICER_SCALE_FACTOR,
+                                                  2 * SEQ_SLICER_SCALE_FACTOR,  2 * SEQ_SLICER_SCALE_FACTOR) };
+
+    SolverConfiguration solver_configuration(printer_geometry);
+    solver_configuration.decimation_precision = SEQ_DECIMATION_PRECISION_HIGH;
+
+    ObjectToPrint left;
+    left.id = 1;
+    left.total_height = 10 * SEQ_SLICER_SCALE_FACTOR;
+    left.pgns_at_height.emplace_back(0, rect(0, 0, 10 * SEQ_SLICER_SCALE_FACTOR, 10 * SEQ_SLICER_SCALE_FACTOR));
+
+    ObjectToPrint previous;
+    previous.id = 2;
+    previous.glued_to_next = true;
+    previous.total_height = 10 * SEQ_SLICER_SCALE_FACTOR;
+    previous.pgns_at_height = left.pgns_at_height;
+
+    ObjectToPrint next;
+    next.id = 3;
+    next.total_height = 10 * SEQ_SLICER_SCALE_FACTOR;
+    next.pgns_at_height = left.pgns_at_height;
+
+    std::vector<ObjectToPrint> objects_to_print{left, previous, next};
+    ScheduledPlate plate;
+    plate.scheduled_objects.emplace_back(1, 50 * SEQ_SLICER_SCALE_FACTOR, 10 * SEQ_SLICER_SCALE_FACTOR);
+    plate.scheduled_objects.emplace_back(2,  0 * SEQ_SLICER_SCALE_FACTOR, 10 * SEQ_SLICER_SCALE_FACTOR);
+    plate.scheduled_objects.emplace_back(3,100 * SEQ_SLICER_SCALE_FACTOR, 10 * SEQ_SLICER_SCALE_FACTOR);
+
+    std::optional<SequentialConflict> conflict = check_ScheduledObjectsForSequentialConflictDetailed(
+        solver_configuration, printer_geometry, objects_to_print, std::vector<ScheduledPlate>{plate});
+
+    REQUIRE(conflict.has_value());
+    REQUIRE(conflict->first_id == 1);
+    REQUIRE(conflict->second_id == 3);
+    REQUIRE(conflict->has_point);
+}

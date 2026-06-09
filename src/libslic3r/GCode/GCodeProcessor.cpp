@@ -4707,7 +4707,15 @@ void GCodeProcessor::detect_sequential_gcode_collision()
     for (size_t i = 1; i < m_result.moves.size(); ++i) {
         const GCodeProcessorResult::MoveVertex& prev = m_result.moves[i - 1];
         const GCodeProcessorResult::MoveVertex& move = m_result.moves[i];
-        const int object_id = move.object_id;
+        int object_id = move.object_id;
+
+        // Sequential wipe-tower / toolchange moves may not always carry an object
+        // id in the processed G-code stream. Attribute those moves to the active
+        // sequential object so they are checked against already completed prints
+        // instead of being skipped entirely.
+        if (object_id < 0 && current_object_id >= 0 &&
+            (move.extrusion_role == GCodeExtrusionRole::WipeTower || move.type == EMoveType::Wipe))
+            object_id = current_object_id;
 
         if (object_id < 0)
             continue;
